@@ -1,0 +1,685 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: GradeAI private grading SaaS
+Parameters:
+  ModelId:
+    Type: String
+    Default: amazon.nova-lite-v1:0
+  ModelResourceArn:
+    Type: String
+    Default: ''
+    Description: Exact invocation ARN override, such as an inference profile ARN.
+  ModelDestinationArns:
+    Type: CommaDelimitedList
+    Default: ''
+    Description: Exact foundation model ARNs in destination regions for a cross-region inference profile.
+  ModelOutputTokens:
+    Type: Number
+    Default: 4096
+    MinValue: 512
+  MaxImageBytes:
+    Type: Number
+    Default: 3750000
+    MinValue: 1
+    MaxValue: 20971520
+  PdfCitations:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: Enable visual PDF processing for Bedrock models that require citations.
+  MaxPdfBytes:
+    Type: Number
+    Default: 4500000
+    MinValue: 1
+    MaxValue: 20971520
+  InputUSDPerMillion:
+    Type: Number
+    Default: 0.06
+    MinValue: 0
+  OutputUSDPerMillion:
+    Type: Number
+    Default: 0.24
+    MinValue: 0
+  MonthlyQuota:
+    Type: Number
+    Default: 30
+    MinValue: 1
+  YearlyQuota:
+    Type: Number
+    Default: 30
+    MinValue: 1
+  MonthlyPlanName:
+    Type: String
+    Default: Monthly
+  YearlyPlanName:
+    Type: String
+    Default: Yearly
+  MonthlyDisplayPrice:
+    Type: Number
+    Description: Monthly Stripe price in USD, including cents as a decimal
+    MinValue: 0.01
+  YearlyDisplayPrice:
+    Type: Number
+    Description: Annual Stripe price in USD, including cents as a decimal
+    MinValue: 0.01
+  MonthlyPrice:
+    Type: String
+    AllowedPattern: 'price_[a-zA-Z0-9]+'
+  YearlyPrice:
+    Type: String
+    AllowedPattern: 'price_[a-zA-Z0-9]+'
+  StripeSecretArn:
+    Type: String
+    Description: ARN of JSON secret with secretKey and webhookSecret
+  DailyCap:
+    Type: Number
+    Default: 20
+    MinValue: 1
+  AlertEmail:
+    Type: String
+  BudgetUSD:
+    Type: Number
+    Default: 50
+    MinValue: 1
+  CustomDomain:
+    Type: String
+    Default: ''
+  CertificateArn:
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^arn:aws:acm:us-east-1:[0-9]{12}:certificate/[a-zA-Z0-9-]+$'
+    Description: ACM certificate in us-east-1 for the CloudFront custom domain
+Rules:
+  CustomDomainNeedsCertificate:
+    RuleCondition: !Not [!Equals [!Ref CustomDomain, '']]
+    Assertions:
+      - Assert: !Not [!Equals [!Ref CertificateArn, '']]
+        AssertDescription: Supply a us-east-1 certificate for the custom domain.
+Conditions:
+  HasDomain: !Not [!Equals [!Ref CustomDomain, '']]
+  HasModelArn: !Not [!Equals [!Ref ModelResourceArn, '']]
+  HasModelDestinations: !Not [!Equals [!Join ['', !Ref ModelDestinationArns], '']]
+Globals:
+  Function:
+    Runtime: python3.12
+    Timeout: 25
+    MemorySize: 256
+    Layers: [!Ref SharedLayer]
+    Environment:
+      Variables:
+        TABLE: !Ref Data
+        UPLOAD_BUCKET: !Ref Uploads
+        METRIC_NAMESPACE: !Sub 'GradeAI/${AWS::StackName}'
+Resources:
+  Data:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      DeletionProtectionEnabled: true
+      SSESpecification: {SSEEnabled: true}
+      AttributeDefinitions:
+        - {AttributeName: PK, AttributeType: S}
+        - {AttributeName: SK, AttributeType: S}
+        - {AttributeName: submissionId, AttributeType: S}
+        - {AttributeName: pending, AttributeType: S}
+        - {AttributeName: pendingUntil, AttributeType: N}
+      KeySchema:
+        - {AttributeName: PK, KeyType: HASH}
+        - {AttributeName: SK, KeyType: RANGE}
+      GlobalSecondaryIndexes:
+        - IndexName: SubmissionId
+          KeySchema:
+            - {AttributeName: submissionId, KeyType: HASH}
+            - {AttributeName: PK, KeyType: RANGE}
+          Projection: {ProjectionType: KEYS_ONLY}
+        - IndexName: Pending
+          KeySchema:
+            - {AttributeName: pending, KeyType: HASH}
+            - {AttributeName: pendingUntil, KeyType: RANGE}
+          Projection:
+            ProjectionType: INCLUDE
+            NonKeyAttributes: [status, lease, reservation, reservedWindow]
+      TimeToLiveSpecification: {AttributeName: expiresAt, Enabled: true}
+  Uploads:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration: &private
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption: &encryption
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}
+      OwnershipControls: &ownership
+        Rules: [{ObjectOwnership: BucketOwnerEnforced}]
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders: [Content-Type, If-None-Match]
+            AllowedMethods: [PUT]
+            AllowedOrigins: [!If [HasDomain, !Sub 'https://${CustomDomain}', !Sub 'https://${Distribution.DomainName}']]
+            MaxAge: 300
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireOriginals
+            Prefix: uploads/
+            Status: Enabled
+            ExpirationInDays: 30
+            AbortIncompleteMultipartUpload: {DaysAfterInitiation: 1}
+  UploadPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref Uploads
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource: [!GetAtt Uploads.Arn, !Sub '${Uploads.Arn}/*']
+            Condition: {Bool: {'aws:SecureTransport': 'false'}}
+  Site:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration: *private
+      BucketEncryption: *encryption
+      OwnershipControls: *ownership
+  SiteAccess:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub '${AWS::StackName}-site'
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+  SitePolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref Site
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: cloudfront.amazonaws.com}
+            Action: 's3:GetObject'
+            Resource: !Sub '${Site.Arn}/*'
+            Condition:
+              StringEquals:
+                'AWS:SourceArn': !Sub 'arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${Distribution}'
+  Router:
+    Type: AWS::CloudFront::Function
+    Properties:
+      Name: !Sub '${AWS::StackName}-router'
+      AutoPublish: true
+      FunctionConfig: {Comment: React history routes, Runtime: cloudfront-js-2.0}
+      FunctionCode: |
+        function handler(event) {
+          var request = event.request;
+          if (request.uri.indexOf('.') === -1) request.uri = '/index.html';
+          return request;
+        }
+  Distribution:
+    Metadata:
+      cfn-lint:
+        config:
+          ignore_checks: [W1030]
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        HttpVersion: http2and3
+        IPV6Enabled: true
+        DefaultRootObject: index.html
+        Aliases: !If [HasDomain, [!Ref CustomDomain], !Ref 'AWS::NoValue']
+        ViewerCertificate: !If
+          - HasDomain
+          - {AcmCertificateArn: !Ref CertificateArn, SslSupportMethod: sni-only, MinimumProtocolVersion: TLSv1.2_2021}
+          - {CloudFrontDefaultCertificate: true}
+        Origins:
+          - Id: site
+            DomainName: !GetAtt Site.RegionalDomainName
+            S3OriginConfig: {OriginAccessIdentity: ''}
+            OriginAccessControlId: !GetAtt SiteAccess.Id
+        DefaultCacheBehavior:
+          TargetOriginId: site
+          ViewerProtocolPolicy: redirect-to-https
+          Compress: true
+          CachePolicyId: '4135ea2d-6df8-44a3-9df3-4b5a84be39ad'
+          ResponseHeadersPolicyId: '67f7725c-6f97-4210-82d7-5512b31e9d03'
+          FunctionAssociations:
+            - EventType: viewer-request
+              FunctionARN: !GetAtt Router.FunctionMetadata.FunctionARN
+        CacheBehaviors:
+          - PathPattern: /assets/*
+            TargetOriginId: site
+            ViewerProtocolPolicy: redirect-to-https
+            Compress: true
+            CachePolicyId: '658327ea-f89d-4fab-a63d-7e88639e58f6'
+            ResponseHeadersPolicyId: '67f7725c-6f97-4210-82d7-5512b31e9d03'
+  SharedLayer:
+    Type: AWS::Serverless::LayerVersion
+    Metadata: {BuildMethod: makefile}
+    Properties:
+      ContentUri: lambda/shared
+      CompatibleRuntimes: [python3.12]
+  DocxLayer:
+    Type: AWS::Serverless::LayerVersion
+    Metadata: {BuildMethod: makefile, BuildArchitecture: x86_64}
+    Properties:
+      ContentUri: lambda/docx
+      CompatibleRuntimes: [python3.12]
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      DeletionProtection: ACTIVE
+      UsernameAttributes: [email]
+      AutoVerifiedAttributes: [email]
+      UsernameConfiguration: {CaseSensitive: false}
+      AccountRecoverySetting:
+        RecoveryMechanisms: [{Name: verified_email, Priority: 1}]
+      AdminCreateUserConfig: {AllowAdminCreateUserOnly: false}
+      Policies:
+        PasswordPolicy: {MinimumLength: 12, RequireLowercase: true, RequireUppercase: true, RequireNumbers: true, RequireSymbols: false}
+      LambdaConfig: {PostConfirmation: !GetAtt Signup.Arn}
+  SignupPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref Signup
+      Principal: cognito-idp.amazonaws.com
+      SourceArn: !GetAtt UserPool.Arn
+  UserClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref UserPool
+      GenerateSecret: false
+      EnableTokenRevocation: true
+      PreventUserExistenceErrors: ENABLED
+      ExplicitAuthFlows: [ALLOW_USER_SRP_AUTH, ALLOW_REFRESH_TOKEN_AUTH]
+      IdTokenValidity: 15
+      AccessTokenValidity: 15
+      RefreshTokenValidity: 7
+      TokenValidityUnits: {IdToken: minutes, AccessToken: minutes, RefreshToken: days}
+  SignupAcl:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Scope: REGIONAL
+      DefaultAction: {Allow: {}}
+      VisibilityConfig: {CloudWatchMetricsEnabled: true, MetricName: GradeAISignup, SampledRequestsEnabled: false}
+      Rules:
+        - Name: SignupPerIp
+          Priority: 0
+          Action: {Block: {}}
+          Statement:
+            RateBasedStatement:
+              AggregateKeyType: IP
+              Limit: 10
+              EvaluationWindowSec: 300
+              ScopeDownStatement:
+                ByteMatchStatement:
+                  FieldToMatch: {SingleHeader: {Name: x-amz-target}}
+                  PositionalConstraint: ENDS_WITH
+                  SearchString: '.SignUp'
+                  TextTransformations: [{Type: NONE, Priority: 0}]
+          VisibilityConfig: {CloudWatchMetricsEnabled: true, MetricName: GradeAISignupPerIp, SampledRequestsEnabled: false}
+  CognitoWebAcl:
+    Type: AWS::WAFv2::WebACLAssociation
+    Properties:
+      ResourceArn: !GetAtt UserPool.Arn
+      WebACLArn: !GetAtt SignupAcl.Arn
+  Api:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: '$default'
+      DefaultRouteSettings: {ThrottlingBurstLimit: 60, ThrottlingRateLimit: 30}
+      CorsConfiguration:
+        AllowOrigins: [!If [HasDomain, !Sub 'https://${CustomDomain}', !Sub 'https://${Distribution.DomainName}']]
+        AllowHeaders: [authorization, content-type]
+        AllowMethods: [GET, POST, DELETE, OPTIONS]
+        MaxAge: 300
+      Auth:
+        DefaultAuthorizer: Cognito
+        Authorizers:
+          Cognito:
+            IdentitySource: '$request.header.Authorization'
+            JwtConfiguration:
+              issuer: !Sub 'https://cognito-idp.${AWS::Region}.${AWS::URLSuffix}/${UserPool}'
+              audience: [!Ref UserClient]
+  Alerts:
+    Type: AWS::SNS::Topic
+    Properties:
+      Subscription: [{Endpoint: !Ref AlertEmail, Protocol: email}]
+  Budget:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetLimit: {Amount: !Ref BudgetUSD, Unit: USD}
+        BudgetType: COST
+        TimeUnit: MONTHLY
+      NotificationsWithSubscribers:
+        - Notification: {ComparisonOperator: GREATER_THAN, NotificationType: ACTUAL, Threshold: 80}
+          Subscribers: [{Address: !Ref AlertEmail, SubscriptionType: EMAIL}]
+  Signup:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: app.handler
+      CodeUri: lambda/signup
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: [dynamodb:PutItem]
+              Resource: !GetAtt Data.Arn
+  SignupLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${Signup}'
+      RetentionInDays: 30
+  Presign:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: app.handler
+      CodeUri: lambda/presign
+      Environment:
+        Variables:
+          DAILY_CAP: !Ref DailyCap
+          MAX_IMAGE_BYTES: !Ref MaxImageBytes
+          MAX_PDF_BYTES: !Ref MaxPdfBytes
+          MONTHLY_QUOTA: !Ref MonthlyQuota
+          YEARLY_QUOTA: !Ref YearlyQuota
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:UpdateItem]
+              Resource: !GetAtt Data.Arn
+            - Effect: Allow
+              Action: [s3:PutObject]
+              Resource: !Sub '${Uploads.Arn}/uploads/*'
+      Events:
+        Route0:
+          Type: HttpApi
+          Properties: {ApiId: !Ref Api, Method: POST, Path: "/uploads/presign"}
+  PresignLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${Presign}'
+      RetentionInDays: 30
+  Submissions:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: app.handler
+      CodeUri: lambda/submissions
+      Environment:
+        Variables:
+          MONTHLY_QUOTA: !Ref MonthlyQuota
+          YEARLY_QUOTA: !Ref YearlyQuota
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: [dynamodb:GetItem, dynamodb:Query, dynamodb:UpdateItem, dynamodb:DeleteItem]
+              Resource: !GetAtt Data.Arn
+            - Effect: Allow
+              Action: dynamodb:Query
+              Resource: !Sub '${Data.Arn}/index/SubmissionId'
+            - Effect: Allow
+              Action: [s3:DeleteObject]
+              Resource: !Sub '${Uploads.Arn}/uploads/*'
+      Events:
+        Route0:
+          Type: HttpApi
+          Properties: {ApiId: !Ref Api, Method: GET, Path: "/submissions"}
+        Route1:
+          Type: HttpApi
+          Properties: {ApiId: !Ref Api, Method: GET, Path: "/submissions/{id}"}
+        Route2:
+          Type: HttpApi
+          Properties: {ApiId: !Ref Api, Method: DELETE, Path: "/submissions/{id}"}
+        Route3:
+          Type: HttpApi
+          Properties: {ApiId: !Ref Api, Method: GET, Path: "/me/usage"}
+        Route4:
+          Type: HttpApi
+          Properties: {ApiId: !Ref Api, Method: DELETE, Path: "/me"}
+  SubmissionsLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${Submissions}'
+      RetentionInDays: 30
+  Grader:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: app.handler
+      CodeUri: lambda/grader
+      Environment:
+        Variables:
+          MODEL_ID: !Ref ModelId
+          MODEL_OUTPUT_TOKENS: !Ref ModelOutputTokens
+          PDF_CITATIONS: !Ref PdfCitations
+          INPUT_USD_PER_MILLION: !Ref InputUSDPerMillion
+          OUTPUT_USD_PER_MILLION: !Ref OutputUSDPerMillion
+      Layers: [!Ref DocxLayer]
+      Timeout: 300
+      MemorySize: 1024
+      ReservedConcurrentExecutions: 8
+      EventInvokeConfig:
+        MaximumRetryAttempts: 2
+        MaximumEventAgeInSeconds: 900
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: [dynamodb:GetItem, dynamodb:Query, dynamodb:UpdateItem]
+              Resource: !GetAtt Data.Arn
+            - Effect: Allow
+              Action: dynamodb:Query
+              Resource: !Sub '${Data.Arn}/index/SubmissionId'
+            - Effect: Allow
+              Action: [s3:GetObject, s3:DeleteObject]
+              Resource: !Sub '${Uploads.Arn}/uploads/*'
+            - Effect: Allow
+              Action: bedrock:InvokeModel
+              Resource: !If [HasModelArn, !Ref ModelResourceArn, !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/${ModelId}']
+            - !If
+              - HasModelDestinations
+              - Effect: Allow
+                Action: bedrock:InvokeModel
+                Resource: !Ref ModelDestinationArns
+              - !Ref 'AWS::NoValue'
+      Events:
+        Uploaded:
+          Type: S3
+          Properties:
+            Bucket: !Ref Uploads
+            Events: s3:ObjectCreated:Put
+            Filter:
+              S3Key:
+                Rules: [{Name: prefix, Value: uploads/}]
+  GraderLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${Grader}'
+      RetentionInDays: 30
+  Billing:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: app.handler
+      CodeUri: lambda/billing
+      Environment:
+        Variables:
+          STRIPE_SECRET: !Ref StripeSecretArn
+          MONTHLY_PRICE: !Ref MonthlyPrice
+          YEARLY_PRICE: !Ref YearlyPrice
+          SITE_ORIGIN: !If [HasDomain, !Sub 'https://${CustomDomain}', !Sub 'https://${Distribution.DomainName}']
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: [dynamodb:GetItem, dynamodb:UpdateItem]
+              Resource: !GetAtt Data.Arn
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Ref StripeSecretArn
+      Events:
+        Route0:
+          Type: HttpApi
+          Properties: {ApiId: !Ref Api, Method: POST, Path: "/billing/checkout"}
+        Route1:
+          Type: HttpApi
+          Properties: {ApiId: !Ref Api, Method: POST, Path: "/billing/portal"}
+  BillingLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${Billing}'
+      RetentionInDays: 30
+  Webhook:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: app.handler
+      CodeUri: lambda/webhook
+      Environment:
+        Variables:
+          STRIPE_SECRET: !Ref StripeSecretArn
+          MONTHLY_PRICE: !Ref MonthlyPrice
+          YEARLY_PRICE: !Ref YearlyPrice
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:UpdateItem]
+              Resource: !GetAtt Data.Arn
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Ref StripeSecretArn
+      Events:
+        Route0:
+          Type: HttpApi
+          Properties: {ApiId: !Ref Api, Method: POST, Path: "/billing/webhook", Auth: {Authorizer: NONE}}
+  WebhookLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${Webhook}'
+      RetentionInDays: 30
+  Maintenance:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: app.handler
+      CodeUri: lambda/maintenance
+      Environment:
+        Variables:
+          STRIPE_SECRET: !Ref StripeSecretArn
+          USER_POOL: !Ref UserPool
+      Timeout: 240
+      ReservedConcurrentExecutions: 1
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: [dynamodb:GetItem, dynamodb:Query, dynamodb:UpdateItem, dynamodb:DeleteItem, dynamodb:BatchWriteItem]
+              Resource: !GetAtt Data.Arn
+            - Effect: Allow
+              Action: dynamodb:Query
+              Resource: !Sub '${Data.Arn}/index/Pending'
+            - Effect: Allow
+              Action: [s3:DeleteObject]
+              Resource: !Sub '${Uploads.Arn}/uploads/*'
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Ref StripeSecretArn
+            - Effect: Allow
+              Action: cognito-idp:AdminDeleteUser
+              Resource: !GetAtt UserPool.Arn
+            - Effect: Allow
+              Action: s3:ListBucket
+              Resource: !GetAtt Uploads.Arn
+              Condition: {StringLike: {'s3:prefix': 'uploads/*'}}
+      Events:
+        Cleanup:
+          Type: Schedule
+          Properties: {Schedule: 'rate(5 minutes)'}
+  MaintenanceLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${Maintenance}'
+      RetentionInDays: 30
+  GraderAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmActions: [!Ref Alerts]
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      Dimensions: [{Name: FunctionName, Value: !Ref Grader}]
+  MaintenanceAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmActions: [!Ref Alerts]
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      Dimensions: [{Name: FunctionName, Value: !Ref Maintenance}]
+  WebhookAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmActions: [!Ref Alerts]
+      Namespace: !Sub 'GradeAI/${AWS::StackName}'
+      MetricName: ApiFailures
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+  Analytics:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub '${AWS::StackName}-admin'
+      DashboardBody: !Sub |
+        {"widgets":[
+          {"type":"metric","x":0,"y":0,"width":12,"height":6,"properties":{"title":"Trial and conversion","region":"${AWS::Region}","period":604800,"stat":"Sum","metrics":[
+            ["GradeAI/${AWS::StackName}","TrialSignups",{"id":"signups"}],
+            [".","TrialSheets",{"id":"sheets"}],
+            [".","Conversions",{"id":"paid"}],
+            [{"expression":"IF(signups>0,sheets/signups,0)","label":"Trial sheets per signup"}],
+            [{"expression":"IF(signups>0,100*paid/signups,0)","label":"Period conversion ratio (%)"}]]}},
+          {"type":"metric","x":12,"y":0,"width":12,"height":6,"properties":{"title":"Grading reliability and AI cost","region":"${AWS::Region}","period":86400,"stat":"Sum","metrics":[
+            ["GradeAI/${AWS::StackName}","Completed",{"id":"done","visible":false}],
+            [".","Failed",{"id":"fail","visible":false}],
+            [".","EstimatedAIUSD",{"id":"cost","visible":false}],
+            [{"expression":"IF(done>0,100*fail/done,0)","label":"Failed sheets (%)"}],
+            [{"expression":"IF(done>0,cost/done,0)","label":"AI USD per resolved sheet","yAxis":"right"}]]}},
+          {"type":"metric","x":0,"y":12,"width":24,"height":6,"properties":{"title":"Trial accounts reaching each usage milestone","region":"${AWS::Region}","period":604800,"stat":"Sum","metrics":[
+            ["GradeAI/${AWS::StackName}","TrialReached1",{"label":"1 sheet"}],
+            [".","TrialReached2",{"label":"2 sheets"}],
+            [".","TrialReached3",{"label":"3 sheets"}],
+            [".","TrialReached4",{"label":"4 sheets"}],
+            [".","TrialReached5",{"label":"5 sheets"}]]}},
+          {"type":"metric","x":0,"y":6,"width":24,"height":6,"properties":{"title":"Bedrock tokens, calls and spend","region":"${AWS::Region}","period":86400,"stat":"Sum","metrics":[
+            ["GradeAI/${AWS::StackName}","TokensIn"],
+            [".","TokensOut"],
+            [".","BedrockCalls"],
+            [".","EstimatedAIUSD",{"yAxis":"right"}]]}}
+        ]}
+Outputs:
+  SiteBucket: {Value: !Ref Site}
+  DistributionId: {Value: !Ref Distribution}
+  SiteUrl: {Value: !If [HasDomain, !Sub 'https://${CustomDomain}', !Sub 'https://${Distribution.DomainName}']}
+  ApiUrl: {Value: !GetAtt Api.ApiEndpoint}
+  StripeWebhookUrl: {Value: !Sub '${Api.ApiEndpoint}/billing/webhook'}
+  PoolId: {Value: !Ref UserPool}
+  ClientId: {Value: !Ref UserClient}
+  MonthlyQuota: {Value: !Ref MonthlyQuota}
+  YearlyQuota: {Value: !Ref YearlyQuota}
+  MonthlyName: {Value: !Ref MonthlyPlanName}
+  YearlyName: {Value: !Ref YearlyPlanName}
+  MonthlyDisplayPrice: {Value: !Ref MonthlyDisplayPrice}
+  YearlyDisplayPrice: {Value: !Ref YearlyDisplayPrice}
+  Dashboard: {Value: !Ref Analytics}
