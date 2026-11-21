@@ -144,7 +144,19 @@ Resources:
       TimeToLiveSpecification: {AttributeName: expiresAt, Enabled: true}
   Uploads:
     Type: AWS::S3::Bucket
+    DependsOn: GraderUploadPermission
     Properties:
+      # Derive the name without referencing the bucket resource in the grader or its permission.
+      BucketName: &uploadsName !Sub
+        - 'gradeai-uploads-${StackUuid}'
+        - StackUuid: !Select [2, !Split ['/', !Ref 'AWS::StackId']]
+      NotificationConfiguration:
+        LambdaConfigurations:
+          - Event: 's3:ObjectCreated:Put'
+            Function: !GetAtt Grader.Arn
+            Filter:
+              S3Key:
+                Rules: [{Name: prefix, Value: uploads/}]
       PublicAccessBlockConfiguration: &private
         BlockPublicAcls: true
         BlockPublicPolicy: true
@@ -455,6 +467,7 @@ Resources:
       CodeUri: lambda/grader
       Environment:
         Variables:
+          UPLOAD_BUCKET: *uploadsName
           MODEL_ID: !Ref ModelId
           MODEL_OUTPUT_TOKENS: !Ref ModelOutputTokens
           PDF_CITATIONS: !Ref PdfCitations
@@ -477,7 +490,9 @@ Resources:
               Resource: !Sub '${Data.Arn}/index/SubmissionId'
             - Effect: Allow
               Action: [s3:GetObject, s3:DeleteObject]
-              Resource: !Sub '${Uploads.Arn}/uploads/*'
+              Resource: !Sub
+                - 'arn:${AWS::Partition}:s3:::${BucketName}/uploads/*'
+                - BucketName: *uploadsName
             - Effect: Allow
               Action: bedrock:InvokeModel
               Resource: !If [HasModelArn, !Ref ModelResourceArn, !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/${ModelId}']
@@ -487,15 +502,16 @@ Resources:
                 Action: bedrock:InvokeModel
                 Resource: !Ref ModelDestinationArns
               - !Ref 'AWS::NoValue'
-      Events:
-        Uploaded:
-          Type: S3
-          Properties:
-            Bucket: !Ref Uploads
-            Events: s3:ObjectCreated:Put
-            Filter:
-              S3Key:
-                Rules: [{Name: prefix, Value: uploads/}]
+  GraderUploadPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref Grader
+      Principal: s3.amazonaws.com
+      SourceAccount: !Ref 'AWS::AccountId'
+      SourceArn: !Sub
+        - 'arn:${AWS::Partition}:s3:::${BucketName}'
+        - BucketName: *uploadsName
   GraderLogs:
     Type: AWS::Logs::LogGroup
     Properties:
