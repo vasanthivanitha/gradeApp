@@ -10,7 +10,10 @@ from grade_common import Problem
 
 @lru_cache(maxsize=1)
 def config():
-    secret = boto3.client('secretsmanager').get_secret_value(SecretId=os.environ['STRIPE_SECRET'])
+    secret_arn = os.environ.get('STRIPE_SECRET')
+    if not secret_arn:
+        raise Problem(503, 'Billing is unavailable on this deployment.')
+    secret = boto3.client('secretsmanager').get_secret_value(SecretId=secret_arn)
     result = json.loads(secret['SecretString'])
     stripe.api_key = result['secretKey']
     stripe.api_version = '2025-08-27.basil'

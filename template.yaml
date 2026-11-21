@@ -56,27 +56,34 @@ Parameters:
     Default: Yearly
   MonthlyDisplayPrice:
     Type: Number
+    Default: 9.99
     Description: Monthly Stripe price in USD, including cents as a decimal
     MinValue: 0.01
   YearlyDisplayPrice:
     Type: Number
+    Default: 89.99
     Description: Annual Stripe price in USD, including cents as a decimal
     MinValue: 0.01
   MonthlyPrice:
     Type: String
+    Default: price_stagingmonthly
     AllowedPattern: 'price_[a-zA-Z0-9]+'
   YearlyPrice:
     Type: String
+    Default: price_stagingyearly
     AllowedPattern: 'price_[a-zA-Z0-9]+'
   StripeSecretArn:
     Type: String
-    Description: ARN of JSON secret with secretKey and webhookSecret
+    Default: ''
+    Description: Optional ARN of JSON secret with secretKey and webhookSecret. Leave blank for grading-only staging.
   DailyCap:
     Type: Number
     Default: 20
     MinValue: 1
   AlertEmail:
     Type: String
+    Default: ''
+    Description: Optional email address for CloudWatch and budget notifications.
   BudgetUSD:
     Type: Number
     Default: 50
@@ -96,6 +103,8 @@ Rules:
       - Assert: !Not [!Equals [!Ref CertificateArn, '']]
         AssertDescription: Supply a us-east-1 certificate for the custom domain.
 Conditions:
+  HasAlertEmail: !Not [!Equals [!Ref AlertEmail, '']]
+  HasStripeSecret: !Not [!Equals [!Ref StripeSecretArn, '']]
   HasDomain: !Not [!Equals [!Ref CustomDomain, '']]
   HasModelArn: !Not [!Equals [!Ref ModelResourceArn, '']]
   HasModelDestinations: !Not [!Equals [!Join ['', !Ref ModelDestinationArns], '']]
@@ -363,8 +372,13 @@ Resources:
               audience: [!Ref UserClient]
   Alerts:
     Type: AWS::SNS::Topic
+  AlertSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasAlertEmail
     Properties:
-      Subscription: [{Endpoint: !Ref AlertEmail, Protocol: email}]
+      TopicArn: !Ref Alerts
+      Endpoint: !Ref AlertEmail
+      Protocol: email
   Budget:
     Type: AWS::Budgets::Budget
     Properties:
@@ -372,9 +386,11 @@ Resources:
         BudgetLimit: {Amount: !Ref BudgetUSD, Unit: USD}
         BudgetType: COST
         TimeUnit: MONTHLY
-      NotificationsWithSubscribers:
-        - Notification: {ComparisonOperator: GREATER_THAN, NotificationType: ACTUAL, Threshold: 80}
-          Subscribers: [{Address: !Ref AlertEmail, SubscriptionType: EMAIL}]
+      NotificationsWithSubscribers: !If
+        - HasAlertEmail
+        - - Notification: {ComparisonOperator: GREATER_THAN, NotificationType: ACTUAL, Threshold: 80}
+            Subscribers: [{Address: !Ref AlertEmail, SubscriptionType: EMAIL}]
+        - !Ref 'AWS::NoValue'
   Signup:
     Type: AWS::Serverless::Function
     Properties:
@@ -533,9 +549,12 @@ Resources:
             - Effect: Allow
               Action: [dynamodb:GetItem, dynamodb:UpdateItem]
               Resource: !GetAtt Data.Arn
-            - Effect: Allow
-              Action: secretsmanager:GetSecretValue
-              Resource: !Ref StripeSecretArn
+            - !If
+              - HasStripeSecret
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref StripeSecretArn
+              - !Ref 'AWS::NoValue'
       Events:
         Route0:
           Type: HttpApi
@@ -563,9 +582,12 @@ Resources:
             - Effect: Allow
               Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:UpdateItem]
               Resource: !GetAtt Data.Arn
-            - Effect: Allow
-              Action: secretsmanager:GetSecretValue
-              Resource: !Ref StripeSecretArn
+            - !If
+              - HasStripeSecret
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref StripeSecretArn
+              - !Ref 'AWS::NoValue'
       Events:
         Route0:
           Type: HttpApi
@@ -597,9 +619,12 @@ Resources:
             - Effect: Allow
               Action: [s3:DeleteObject]
               Resource: !Sub '${Uploads.Arn}/uploads/*'
-            - Effect: Allow
-              Action: secretsmanager:GetSecretValue
-              Resource: !Ref StripeSecretArn
+            - !If
+              - HasStripeSecret
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref StripeSecretArn
+              - !Ref 'AWS::NoValue'
             - Effect: Allow
               Action: cognito-idp:AdminDeleteUser
               Resource: !GetAtt UserPool.Arn

@@ -11,6 +11,20 @@ GradeAI lets a parent or guardian upload a photo, PDF, or DOCX and review AI gra
 
 ## Deploy
 
+To test grading in CloudShell, every template parameter has a default. On x86_64 with Python 3.12 and pip available, run:
+
+```bash
+sam build &&
+sam deploy --template-file .aws-sam/build/template.yaml \
+  --stack-name gradeai-staging --region us-east-1 \
+  --config-env staging-defaults --resolve-s3 \
+  --capabilities CAPABILITY_IAM --confirm-changeset
+```
+
+The separate config environment skips overrides saved during earlier guided deploys. This deployment supports registration, uploads, and the five-sheet trial. Billing requires a Stripe secret and real test price IDs. Add `AlertEmail` for email notifications. The budget and CloudWatch alarms are provisioned with the defaults. After deployment, publish the frontend with `./frontend/deploy.sh gradeai-staging us-east-1`.
+
+### Configure Stripe and email alerts
+
 1. In Secrets Manager, create a secret with the following JSON shape. Use test-mode values for staging. You can use a temporary webhook secret to create the stack, then update it with Stripe's endpoint secret before testing billing.
 
    ```json
