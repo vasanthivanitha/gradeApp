@@ -717,10 +717,10 @@ Outputs:
   StripeWebhookUrl: {Value: !Sub '${Api.ApiEndpoint}/billing/webhook'}
   PoolId: {Value: !Ref UserPool}
   ClientId: {Value: !Ref UserClient}
-  MonthlyQuota: {Value: !Ref MonthlyQuota}
-  YearlyQuota: {Value: !Ref YearlyQuota}
+  FrontendMonthlyQuota: {Value: !Ref MonthlyQuota}
+  FrontendYearlyQuota: {Value: !Ref YearlyQuota}
   MonthlyName: {Value: !Ref MonthlyPlanName}
   YearlyName: {Value: !Ref YearlyPlanName}
-  MonthlyDisplayPrice: {Value: !Ref MonthlyDisplayPrice}
-  YearlyDisplayPrice: {Value: !Ref YearlyDisplayPrice}
+  FrontendMonthlyDisplayPrice: {Value: !Ref MonthlyDisplayPrice}
+  FrontendYearlyDisplayPrice: {Value: !Ref YearlyDisplayPrice}
   Dashboard: {Value: !Ref Analytics}

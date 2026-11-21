@@ -8,17 +8,25 @@ cd "$(dirname "$0")"
 stack_outputs=$(aws cloudformation describe-stacks --stack-name "$stack_name" --region "$stack_region" \
   --query 'Stacks[0].Outputs' --output json)
 out() {
-  jq -er --arg key "$1" '.[] | select(.OutputKey == $key) | .OutputValue' <<< "$stack_outputs"
+  local value
+  if ! value=$(jq -er --arg key "$1" --arg legacy "${2:-}" '
+    (. // []) | (map(select(.OutputKey == $key))[0] //
+                 map(select(.OutputKey == $legacy))[0]) | .OutputValue
+  ' <<< "$stack_outputs"); then
+    printf 'Missing stack output %s. Check that %s in %s finished deploying.\n'       "$1" "$stack_name" "$stack_region" >&2
+    return 1
+  fi
+  printf '%s\n' "$value"
 }
 VITE_API_URL=$(out ApiUrl)
 VITE_POOL_ID=$(out PoolId)
 VITE_CLIENT_ID=$(out ClientId)
 VITE_MONTHLY_NAME=$(out MonthlyName)
 VITE_YEARLY_NAME=$(out YearlyName)
-VITE_MONTHLY_PRICE=$(out MonthlyDisplayPrice)
-VITE_YEARLY_PRICE=$(out YearlyDisplayPrice)
-VITE_MONTHLY_QUOTA=$(out MonthlyQuota)
-VITE_YEARLY_QUOTA=$(out YearlyQuota)
+VITE_MONTHLY_PRICE=$(out FrontendMonthlyDisplayPrice MonthlyDisplayPrice)
+VITE_YEARLY_PRICE=$(out FrontendYearlyDisplayPrice YearlyDisplayPrice)
+VITE_MONTHLY_QUOTA=$(out FrontendMonthlyQuota MonthlyQuota)
+VITE_YEARLY_QUOTA=$(out FrontendYearlyQuota YearlyQuota)
 export VITE_API_URL VITE_POOL_ID VITE_CLIENT_ID VITE_MONTHLY_NAME VITE_YEARLY_NAME
 export VITE_MONTHLY_PRICE VITE_YEARLY_PRICE VITE_MONTHLY_QUOTA VITE_YEARLY_QUOTA
 site_bucket=$(out SiteBucket)
