@@ -264,6 +264,44 @@ def writing_prompt(subject, grade_level):
     )
 
 
+def normalize_answer_parts(value):
+    if not isinstance(value, list) or not 2 <= len(value) <= 20:
+        raise ValueError('Invalid answer parts')
+    parts = []
+    for part in value:
+        if not isinstance(part, dict):
+            raise ValueError('Invalid answer part')
+        student = part.get('studentAnswer')
+        if isinstance(student, str) and not student.strip():
+            student = 'No answer'
+        student = feedback_text(student, 240)
+        status = 'incorrect' if student.casefold() == 'no answer' else part.get('status')
+        if not isinstance(status, str) or status not in POINTS:
+            raise ValueError('Invalid answer part status')
+        parts.append({'label': feedback_text(part.get('label'), 80), 'studentAnswer': student,
+                      'correctAnswer': feedback_text(part.get('correctAnswer'), 240), 'status': status})
+    if len({part['label'].casefold() for part in parts}) != len(parts):
+        raise ValueError('Duplicate answer parts')
+    return parts
+
+
+MATH_MULTI_ANSWER_PROMPT = (
+    ' Preserve worksheet order. List every numbered question and each separately labeled subpart '
+    'as its own question row, even when the student leaves a subpart blank. Repeat enough of a shared '
+    'prompt in each row to make it understandable. Use the printed number or subpart as a short label '
+    'field, for example 2(a), when visible; omit the label from the question text itself. '
+    'For one prompt asking for several responses (such as select all that apply, list two solutions, '
+    'or fill several required blanks), keep one question row and list every required response in '
+    'answerParts. Each answer part has label, studentAnswer, correctAnswer and status. '
+    'Include any extra incorrect selections as distinct incorrect parts; list missing required '
+    'responses with studentAnswer equal to No answer and status incorrect. Match unordered responses '
+    'by mathematical equivalence and never penalize a valid alternative unless the prompt requires '
+    'a particular form. Do not include answerParts for single-answer questions or labeled subparts '
+    'that have already been listed as separate rows. The grouped question earns full credit only '
+    'when all required responses are correct and there are no extra incorrect responses.'
+)
+
+
 def parse(raw, subject=None):
     result = decoded_feedback(raw)
     questions, summary = result.get('questions'), result.get('overallFeedback')
@@ -277,7 +315,13 @@ def parse(raw, subject=None):
     for question in questions:
         if not isinstance(question, dict):
             raise ValueError('Invalid question')
+        parts = None
+        if 'answerParts' in question and question['answerParts'] not in (None, []):
+            parts = normalize_answer_parts(question['answerParts'])
         status = question.get('status')
+        if parts:
+            statuses = {part['status'] for part in parts}
+            status = 'correct' if statuses == {'correct'} else 'incorrect' if statuses == {'incorrect'} else 'partial'
         if not isinstance(status, str) or status not in POINTS:
             raise ValueError('Invalid status')
         fields = {}
@@ -286,8 +330,15 @@ def parse(raw, subject=None):
             if not isinstance(value, str) or not 1 <= len(value.strip()) <= 600:
                 raise ValueError('Invalid question field')
             fields[field] = value.strip()
+        if not parts and fields['studentAnswer'].casefold() == 'no answer':
+            status = 'incorrect'
         earned = POINTS[status]
         row = {**fields, 'status': status, 'earned': earned, 'max': 10}
+        label = question.get('label')
+        if isinstance(label, str) and 1 <= len(label.strip()) <= 24:
+            row['label'] = label.strip()
+        if parts:
+            row['answerParts'] = parts
         if status != 'correct':
             practice = fraction_practice(subject, fields['question']) or practice_items(question.get('practice'), fields['question'])
             if practice:
@@ -330,6 +381,8 @@ def grade(sheet, subject, context, totals, grade_level=None, assessment='questio
     elif subject in QUESTION_SKILLS:
         skills = ', '.join(QUESTION_SKILLS[subject])
         prompt += f' Add a skill field to each question. Use exactly one of {skills}, or null if none fits.'
+    if assessment == 'questions' and subject == 'Math':
+        prompt += MATH_MULTI_ANSWER_PROMPT
     if grade_level is not None and assessment == 'questions':
         level = 'Kindergarten' if grade_level == 0 else f'Grade {grade_level}'
         prompt += f' Write the explanations for a U.S. {level} student.'
@@ -337,7 +390,7 @@ def grade(sheet, subject, context, totals, grade_level=None, assessment='questio
         if context.get_remaining_time_in_millis() < 125000:
             raise TimeoutError()
         result = bedrock.converse(modelId=os.environ['MODEL_ID'],
-            system=[{'text': prompt + (PRACTICE_PROMPT if attempt == 0 else '')}], messages=[{'role': 'user', 'content': [sheet,
+            system=[{'text': prompt + (PRACTICE_PROMPT if attempt == 0 else ' Keep the response concise and omit optional practice questions.')}], messages=[{'role': 'user', 'content': [sheet,
                 {'text': 'Grade the attached work and return valid JSON only.'}]}],
             inferenceConfig={'temperature': 0.2, 'maxTokens': int(os.environ['MODEL_OUTPUT_TOKENS'])})
         usage = result['usage']

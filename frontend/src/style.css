@@ -305,3 +305,7 @@ dialog > .actions, dialog > .pricing-grid { margin-top: 15px; }
 @media (min-width: 761px) {
   .writing-comparison { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
+.answer-parts { margin-top: 12px; }
+.answer-parts ul { list-style: none; display: grid; gap: 8px; padding: 0; margin: 8px 0 0; }
+.answer-parts li { padding: 10px; background: #191d2c; border-radius: 8px; overflow-wrap: anywhere; }
+.answer-parts li > div { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; justify-content: space-between; }

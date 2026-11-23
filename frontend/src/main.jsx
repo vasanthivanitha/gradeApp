@@ -490,7 +490,7 @@ function SheetRetry({ item, onSave }) {
     prompt: 'Rewrite this excerpt in your own words.',
     original: example.original, reference: example.revised, reason: example.why,
   })) : questions.flatMap((question, index) => ['incorrect', 'partial'].includes(question.status) ? [{
-    key: 'question:' + index, kind: 'question', index, label: 'Question ' + (index + 1),
+    key: 'question:' + index, kind: 'question', index, label: 'Question ' + (question.label || index + 1),
     prompt: question.question, original: question.studentAnswer,
     reference: question.correctAnswer, reason: question.explanation,
   }] : [])
@@ -612,8 +612,16 @@ function Result() {
     {questions.map((question, index) => {
       const open = expanded.includes(index)
       return <article key={index} className="card question"><button className="question-toggle" type="button" aria-expanded={open} aria-controls={'question-' + index} onClick={() => setExpanded(open ? expanded.filter((i) => i !== index) : [...expanded, index])}>
-        <span>{index + 1}. {question.question}</span><span className={'question-status ' + question.status}>{question.earned}/{question.max} · {question.status}</span><ChevronDown size={18}/></button>
+        <span>{question.label || index + 1}. {question.question}</span><span className={'question-status ' + question.status}>{question.earned}/{question.max} · {question.status}</span><ChevronDown size={18}/></button>
         <div id={'question-' + index} className="question-body" hidden={!open}><dl><div><dt>Student answer</dt><dd>{question.studentAnswer}</dd></div><div><dt>Correct answer</dt><dd>{question.correctAnswer}</dd></div><div><dt>Explanation</dt><dd>{question.explanation}</dd></div></dl>
+          {question.answerParts?.length > 0 && <div className="answer-parts">
+            <h3>Answer-by-answer breakdown</h3>
+            <ul>{question.answerParts.map((part) => <li key={part.label}>
+              <div><strong>{part.label}</strong><span className={'question-status ' + part.status}>{part.status}</span></div>
+              <p><strong>Student answer</strong> {part.studentAnswer}</p>
+              <p><strong>Expected answer</strong> {part.correctAnswer}</p>
+            </li>)}</ul>
+          </div>}
           {open && question.practice?.[0] && <PracticeQuestion question={question.practice[0]}/>}
         </div></article>
     })}</section></>
