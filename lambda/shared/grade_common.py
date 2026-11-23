@@ -20,7 +20,7 @@ KINDS = {
     'application/pdf': 'pdf',
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
 }
-SUBJECTS = ('Math', 'Science', 'English', 'History', 'Geography', 'Biology')
+SUBJECTS = ('English', 'Math', 'Science')
 
 
 def key(uid, sk='PROFILE'):

@@ -220,3 +220,27 @@ dialog > .actions, dialog > .pricing-grid { margin-top: 15px; }
 .rubric-row .section-head { flex-wrap: wrap; margin-bottom: 8px; }
 .rubric-suggestion { margin-top: 8px; }
 .rubric-suggestion strong { color: var(--ink); }
+
+.history-filters { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; padding: 16px; margin-bottom: 15px; }
+.history-coverage { font-size: .9rem; margin-bottom: 14px; }
+.student-heading { margin-top: 21px; flex-wrap: wrap; }
+.progress-panel { margin: 21px 0 30px; }
+.progress-panel > h2 { margin-bottom: 12px; }
+.progress-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.progress-card, .paragraph-practice { padding: 16px; }
+.progress-card .section-head { flex-wrap: wrap; }
+.progress-card p, .paragraph-practice p { font-size: .94rem; }
+.score-history { list-style: none; padding: 0; margin: 8px 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.score-history a { display: grid; gap: 2px; border-radius: 7px; background: #20243a; padding: 5px 8px; font-size: .8rem; white-space: nowrap; }
+.score-history a span { color: var(--ink); }
+.practice-priorities { margin-top: 12px; }
+.practice-priority { border-top: 1px solid var(--border, #282c42); padding: 10px 0; }
+.practice-priority strong, .practice-priority small { display: block; }
+.practice-link { display: inline-block; margin-top: 7px; font-size: .9rem; text-decoration: underline; }
+.paragraph-practice { margin-top: 18px; }
+.paragraph-practice h2 { margin-bottom: 7px; }
+.paragraph-practice li { margin: 5px 0; }
+@media (max-width: 760px) {
+  .history-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .progress-grid { grid-template-columns: 1fr; }
+}

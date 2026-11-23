@@ -28,8 +28,9 @@ def handler(event, context):
     grade_level = data.get('gradeLevel')
     if assessment not in ('questions', 'writing'):
         raise Problem(400, 'Choose a question sheet or a writing sample.')
-    if assessment == 'writing' and (type(grade_level) is not int or not 1 <= grade_level <= 12):
-        raise Problem(400, 'Choose a grade level from 1 through 12.')
+    if (assessment == 'writing' or grade_level is not None) and (
+            type(grade_level) is not int or not 0 <= grade_level <= 5):
+        raise Problem(400, 'Choose Kindergarten or a grade from 1 through 5.')
     extension = KINDS[mime]
     if extension in ('jpeg', 'png', 'webp') and size > int(os.environ['MAX_IMAGE_BYTES']):
         raise Problem(400, 'This grading model requires photos to be smaller. Resize the photo or upload a PDF.')
@@ -73,7 +74,9 @@ def handler(event, context):
             'reservation': 'trial' if trial else 'paid', 'reservedWindow': usage.get('window', 0),
             'pending': 'OPEN', 'pendingUntil': now + 900}
         if assessment == 'writing':
-            item.update(assessment=assessment, gradeLevel=grade_level)
+            item['assessment'] = assessment
+        if grade_level is not None:
+            item['gradeLevel'] = grade_level
         try:
             transact(
                 ('Update', {'Key': key(uid), 'UpdateExpression': update,

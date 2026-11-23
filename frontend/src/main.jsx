@@ -5,10 +5,10 @@ import { AlertCircle, BookOpen, Check, ChevronDown, CircleCheck, CreditCard, Fil
 import { config, login, register, request, resend, reset, session, signOut, upload, verify } from './auth'
 import '@fontsource-variable/sora'
 import '@fontsource-variable/jetbrains-mono'
+import { gradeLabel, gradeLevels, practiceFor, progressFor, subjects } from './practice'
 import './style.css'
 
 const AppContext = createContext(null)
-const subjects = ['Math', 'Science', 'English', 'History', 'Geography', 'Biology']
 const formats = {
   jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp',
   pdf: 'application/pdf', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -59,7 +59,7 @@ function Landing() {
     </div>
     <section className="feature-section content-width" aria-labelledby="features"><h2 id="features">From upload to understanding</h2>
       <div className="feature-grid">
-        <Feature icon={UploadCloud} title="Upload any answer sheet">Send a photo, scanned PDF, or Word document in one of six subjects.</Feature>
+        <Feature icon={UploadCloud} title="Upload any answer sheet">Send a photo, scanned PDF, or Word document for English, Math, or Science in grades K–5.</Feature>
         <Feature icon={FileCheck2} title="Get a score and clear feedback">See the grade, correct answers, and an explanation for each mistake.</Feature>
         <Feature icon={BookOpen} title="Review progress together">Reopen past sheets by student and turn mistakes into practice.</Feature>
       </div>
@@ -218,6 +218,8 @@ function Dashboard() {
 function GradeSheet() {
   const { call, refresh } = useContext(AppContext)
   const navigate = useNavigate()
+  const { state } = useLocation()
+  const initialGrade = gradeLevels.includes(state?.gradeLevel) ? state.gradeLevel : 5
   const picker = useRef(null)
   const [assessment, setAssessment] = useState('questions')
   const [file, setFile] = useState(null)
@@ -246,7 +248,7 @@ function GradeSheet() {
       const info = await call('/uploads/presign', { method: 'POST', body: {
         studentName: fields.get('studentName'), subject: fields.get('subject'),
         assessment,
-        ...(assessment === 'writing' ? { gradeLevel: Number(fields.get('gradeLevel')) } : {}),
+        gradeLevel: Number(fields.get('gradeLevel')),
         fileType: file.type, fileName: file.candidate.name, size: file.candidate.size,
       } })
       await upload(info.uploadUrl, info.headers, file.candidate, setProgress)
@@ -259,16 +261,16 @@ function GradeSheet() {
   }
   return <><div className="page-head"><h1>Grade a sheet</h1><p>Upload a question sheet or get grade-level feedback on a writing sample.</p></div>
     <form className="card upload-form" onSubmit={send}>
-      <div className="form-row"><label>Student nickname<input name="studentName" placeholder="e.g. Alex" required maxLength={40} disabled={progress !== null}/></label>
+      <div className="form-row"><label>Student nickname<input name="studentName" placeholder="e.g. Alex" defaultValue={state?.studentName || ''} required maxLength={40} disabled={progress !== null}/></label>
       <label>Subject<select name="subject" required defaultValue="" disabled={progress !== null}
         onChange={(event) => { if (event.target.value === 'English') setAssessment('writing') }}><option value="" disabled>Select a subject</option>{subjects.map((subject) => <option key={subject}>{subject}</option>)}</select></label></div>
       <div className="form-row assessment-row">
         <label>Assessment type<select value={assessment} disabled={progress !== null} onChange={(event) => setAssessment(event.target.value)}>
           <option value="questions">Question sheet</option><option value="writing">Writing sample</option>
         </select></label>
-        {assessment === 'writing' && <label>Grade level<select name="gradeLevel" defaultValue="5" disabled={progress !== null}>
-          {Array.from({ length: 12 }, (_, index) => index + 1).map((level) => <option key={level} value={level}>Grade {level}</option>)}
-        </select></label>}
+        <label>Grade level<select name="gradeLevel" defaultValue={initialGrade} disabled={progress !== null}>
+          {gradeLevels.map((level) => <option key={level} value={level}>{gradeLabel(level)}</option>)}
+        </select></label>
       </div>
       <div className={'drop-zone' + (dragging ? ' dragging' : '')} onDragOver={(event) => { event.preventDefault(); setDragging(true) }} onDragLeave={() => setDragging(false)}
         onDrop={(event) => { event.preventDefault(); setDragging(false); pick(event.dataTransfer.files[0]) }}>
@@ -295,10 +297,25 @@ const rubricLabels = {
 const rubricLevels = ['No evidence', 'Beginning', 'Developing', 'Meets expectations', 'Exceeds expectations']
 
 function WritingResult({ item }) {
-  return <><div className="page-head"><h1>{item.subject} writing results</h1><p>{item.studentName} · Grade {item.gradeLevel} · {item.fileName}</p></div>
+  const focus = item.feedback.rubric.reduce((lowest, row) => row.earned < lowest.earned ? row : lowest)
+  const practice = practiceFor(focus.criterion, item.subject, item.gradeLevel)
+  return <><div className="page-head"><h1>{item.subject} writing results</h1><p>{item.studentName} · {gradeLabel(item.gradeLevel)} · {item.fileName}</p></div>
     <section className="card result-overview">
       <div className="score-ring" style={{ '--score': item.scorePct + '%' }}><div><strong>{item.totalEarned}/{item.totalMax}</strong><span>Rubric points</span></div></div>
-      <div><span className="grade-pill">Grade {item.gradeLevel} rubric</span><h2>Writing feedback</h2><p>{item.feedback.overallFeedback}</p></div>
+      <div><span className="grade-pill">{gradeLabel(item.gradeLevel)} rubric</span><h2>Writing feedback</h2><p>{item.feedback.overallFeedback}</p></div>
+    </section>
+    <section className="card paragraph-practice">
+      <h2>Write your next paragraph</h2>
+      <p>{item.gradeLevel <= 2
+        ? 'Think of a game you like. Say why you like it, then draw or write one detail.'
+        : 'Should your class have more outdoor learning time? State your opinion and support it with two reasons.'}</p>
+      <ol>
+        <li>{item.gradeLevel <= 2 ? 'Say your main idea out loud.' : 'Open with one sentence that tells the reader your main idea.'}</li>
+        <li>{item.gradeLevel <= 2 ? 'Add a detail that shows what you mean.' : 'Add a reason and a specific example. Use a transition to connect your ideas.'}</li>
+        <li>Read your work out loud. Check for complete sentences and ending punctuation.</li>
+      </ol>
+      <p><strong>Revision focus · {rubricLabels[focus.criterion]}</strong> {focus.suggestion}</p>
+      {practice && <PracticeLink resource={practice.resource}/>}
     </section>
     <section className="writing-rubric">
       <div className="section-head"><h2>Rubric and revision suggestions</h2></div>
@@ -361,7 +378,7 @@ function Result() {
   const questions = item.feedback.questions
   const all = expanded.length === questions.length
   const counts = Object.fromEntries(['correct', 'partial', 'incorrect'].map((status) => [status, questions.filter((question) => question.status === status).length]))
-  return <><div className="page-head"><h1>{item.subject} results</h1><p>{item.studentName} · {item.fileName}</p></div>
+  return <><div className="page-head"><h1>{item.subject} results</h1><p>{item.studentName} · {gradeLabel(item.gradeLevel)} · {item.fileName}</p></div>
     <section className="card result-overview"><div className="score-ring" style={{ '--score': item.scorePct + '%' }}><div><strong>{item.scorePct}%</strong><span>{item.totalEarned} / {item.totalMax} points</span></div></div>
       <div><span className="grade-pill">Grade {item.grade}</span><h2>{item.feedback.encouragement}</h2><p>{item.feedback.overallFeedback}</p></div></section>
     <div className="stat-grid">{Object.entries(counts).map(([status, count]) => <div className={'card stat ' + status} key={status}><span>{status}</span><strong>{count}</strong></div>)}</div>
@@ -374,9 +391,52 @@ function Result() {
     })}</section></>
 }
 
+function PracticeLink({ resource }) {
+  return <a className="practice-link" href={resource.url} target="_blank" rel="noopener noreferrer">{resource.title} ↗</a>
+}
+
+function StudentProgress({ rows, subject }) {
+  const displayedSubjects = subject ? subjects.filter((value) => value === subject) : subjects
+  return <section className="progress-panel" aria-label="Student progress">
+    <h2>Progress and practice</h2>
+    <div className="progress-grid">
+      {displayedSubjects.map((name) => {
+        const { completed, comparable, priorities, hasSkillData } = progressFor(rows, name)
+        const [recent, previous] = comparable
+        const change = previous ? Math.round((recent.scorePct - previous.scorePct) * 10) / 10 : null
+        return <article className="card progress-card" key={name}>
+          <div className="section-head"><h3>{name}</h3><span className="grade-pill">{completed} {completed === 1 ? 'graded sheet' : 'graded sheets'}</span></div>
+          {recent && <><p className="score-history-label">{gradeLabel(recent.gradeLevel)} · {recent.assessment === 'writing' ? 'Writing samples' : 'Question sheets'}</p>
+            <ol className="score-history" aria-label="Recent comparable scores">
+              {comparable.slice(0, 5).reverse().map((row) => <li key={row.submissionId}>
+                <Link to={'/results/' + row.submissionId}><span>{new Date(row.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span>
+                  <strong>{row.scorePct}%</strong></Link>
+              </li>)}
+            </ol>
+            {change !== null && <p>{change > 0 ? '+' : ''}{change} percentage points from the previous comparable sheet.</p>}
+          </>}
+          {!completed && <p>No graded sheets in this view.</p>}
+          {completed > 0 && !hasSkillData && <p>Skill suggestions will appear after new assessments are graded.</p>}
+          {hasSkillData && priorities.length === 0 && <p>No practice priorities in the latest observations.</p>}
+          {priorities.length > 0 && <div className="practice-priorities"><h4>Practice next</h4>
+            {priorities.map((priority) => <div className="practice-priority" key={priority.key}>
+              <strong>{priority.label}</strong>
+              <small>{gradeLabel(priority.grade)} · Needs practice on {priority.misses} of {priority.total} assessed sheets</small>
+              <p>{priority.activity}</p><PracticeLink resource={priority.resource}/>
+            </div>)}</div>}
+        </article>
+      })}
+    </div>
+  </section>
+}
+
 function History() {
   const { call } = useContext(AppContext)
   const [rows, setRows] = useState([])
+  const [student, setStudent] = useState(null)
+  const [grade, setGrade] = useState('')
+  const [subject, setSubject] = useState('')
+  const [period, setPeriod] = useState('')
   const [cursor, setCursor] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -407,21 +467,61 @@ function History() {
     } catch (error) { setError(error.message); setDeleting(null) }
     finally { setBusy(false) }
   }
-  const groups = new Map()
+  const students = new Map()
   for (const row of rows) {
+    const key = row.studentName.toLocaleLowerCase()
+    if (!students.has(key)) students.set(key, row)
+  }
+  const activeStudent = students.has(student) ? student : student === null && students.size === 1 ? students.keys().next().value : ''
+  const studentRows = activeStudent ? rows.filter((row) => row.studentName.toLocaleLowerCase() === activeStudent) : rows
+  const availableGrades = [...new Set(studentRows.map((row) => row.gradeLevel ?? 'unknown'))]
+    .sort((a, b) => (a === 'unknown' ? 99 : a) - (b === 'unknown' ? 99 : b))
+  const selectedGrade = availableGrades.some((level) => String(level) === grade) ? grade : ''
+  const from = period ? Date.now() - Number(period) * 86400000 : 0
+  const filteredRows = studentRows.filter((row) =>
+    (!selectedGrade || String(row.gradeLevel ?? 'unknown') === selectedGrade) &&
+    (!subject || row.subject === subject) && Date.parse(row.createdAt) >= from)
+  const groups = new Map()
+  for (const row of filteredRows) {
     const name = row.studentName.toLocaleLowerCase()
     if (!groups.has(name)) groups.set(name, [])
     groups.get(name).push(row)
   }
-  return <><div className="page-head"><h1>Sheet history</h1><p>Review answer sheets and feedback by student.</p></div><Notice text={error}/>
+  const current = students.get(activeStudent)
+  return <><div className="page-head"><h1>Student history</h1><p>Review graded sheets, compare progress, and find the next skill to practice.</p></div><Notice text={error}/>
+    {rows.length > 0 && <section className="card history-filters" aria-label="History filters">
+      <label>Student<select value={activeStudent} onChange={(event) => { setStudent(event.target.value); setGrade('') }}>
+        <option value="">All students</option>
+        {[...students].map(([key, row]) => <option key={key} value={key}>{row.studentName}</option>)}
+      </select></label>
+      <label>Grade level<select value={selectedGrade} onChange={(event) => setGrade(event.target.value)}>
+        <option value="">All grades</option>
+        {availableGrades.map((level) => <option key={level} value={level}>{gradeLabel(level === 'unknown' ? null : level)}</option>)}
+      </select></label>
+      <label>Subject<select value={subject} onChange={(event) => setSubject(event.target.value)}>
+        <option value="">All subjects</option>
+        {[...new Set([...subjects, ...rows.map((row) => row.subject)])].map((value) => <option key={value}>{value}</option>)}
+      </select></label>
+      <label>Period<select value={period} onChange={(event) => setPeriod(event.target.value)}>
+        <option value="">All dates</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option>
+      </select></label>
+    </section>}
+    {cursor && <p className="history-coverage">This view uses the sheets loaded so far. Load older sheets to include them in the filters and progress summary.</p>}
+    {current && <div className="section-head student-heading"><h2>{current.studentName}</h2>
+      <Link className="button secondary small" to="/grade" state={{
+        studentName: current.studentName, gradeLevel: selectedGrade ? Number(selectedGrade) : current.gradeLevel,
+      }}>Grade another sheet</Link></div>}
+    {current && (!subject || subjects.includes(subject)) && <StudentProgress rows={filteredRows} subject={subject}/>}
+    {!current && rows.length > 0 && <p className="history-coverage">Select a student to see their progress and practice suggestions.</p>}
+    {!loading && rows.length > 0 && filteredRows.length === 0 && <p>No sheets match these filters.</p>}
     {loading && <p role="status">Loading sheets…</p>}
     {!loading && !error && !rows.length && !cursor && <section className="card grading"><FolderClock size={31}/><h2>No sheets yet</h2><Link className="button primary" to="/grade">Grade a sheet</Link></section>}
-    {[...groups.values()].map((group) => <section className="history-group" key={group[0].studentName}><h2>{group[0].studentName}</h2>
-      {group.map((row) => <div className="card history-row" key={row.submissionId}><Link to={'/results/' + row.submissionId}><span className="tile"><FileText size={18}/></span><span><strong>{row.subject}</strong><small>{row.fileName} · {new Date(row.createdAt).toLocaleDateString()}</small></span></Link>
+    {[...groups.values()].map((group) => <section className="history-group" key={group[0].studentName}><h2>{current ? 'Submissions' : group[0].studentName}</h2>
+      {group.map((row) => <div className="card history-row" key={row.submissionId}><Link to={'/results/' + row.submissionId}><span className="tile"><FileText size={18}/></span><span><strong>{row.subject}</strong><small>{gradeLabel(row.gradeLevel)} · {row.fileName} · {new Date(row.createdAt).toLocaleDateString()}</small></span></Link>
         <span className="status">{row.status === 'done' ? row.assessment === 'writing' ? row.totalEarned + '/' + row.totalMax + ' rubric points' : row.scorePct + '% · ' + row.grade : row.status === 'error' ? 'Unable to grade' : row.status}</span>
         <button className="button icon-button" aria-label={'Delete ' + row.fileName} onClick={() => setDeleting(row)}><Trash2 size={17}/></button></div>)}
     </section>)}
-    {cursor && <button className="button secondary" disabled={loading} onClick={() => load(cursor)}>Load more</button>}
+    {cursor && <button className="button secondary" disabled={loading} onClick={() => load(cursor)}>Load older sheets</button>}
     {deleting && <Modal title="Delete this answer sheet?" close={() => !busy && setDeleting(null)}><p>The file and its feedback will be removed.</p><div className="actions"><button className="button secondary" disabled={busy} onClick={() => setDeleting(null)}>Cancel</button><button className="button danger" disabled={busy} onClick={remove}>{busy ? 'Deleting…' : 'Delete sheet'}</button></div></Modal>}
   </>
 }
