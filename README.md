@@ -11,17 +11,16 @@ GradeAI lets a parent or guardian upload a photo, PDF, or DOCX and review AI gra
 
 ## Deploy
 
-To test grading in CloudShell, every template parameter has a default. On x86_64 with Python 3.12 and pip available, run:
+To deploy or update the backend and frontend together from x86_64 AWS CloudShell:
 
 ```bash
-sam build &&
-sam deploy --template-file .aws-sam/build/template.yaml \
-  --stack-name gradeai-staging --region us-east-1 \
-  --config-env staging-defaults --resolve-s3 \
-  --capabilities CAPABILITY_IAM --confirm-changeset
+git pull --ff-only origin main
+./deploy.sh
 ```
 
-The separate config environment skips overrides saved during earlier guided deploys. This deployment supports registration, uploads, and the five-sheet trial. Billing requires a Stripe secret and real test price IDs. Add `AlertEmail` for email notifications. The budget and CloudWatch alarms are provisioned with the defaults. After deployment, publish the frontend with `./frontend/deploy.sh gradeai-staging us-east-1`.
+The defaults are `gradeai-staging-v3` and `us-east-1`. To use a different stack or region, run `./deploy.sh STACK_NAME AWS_REGION`. The script checks Python 3.12, builds in `/tmp`, asks you to review any AWS change set, then publishes the frontend and prints its URL. It can republish the frontend when CloudFormation reports an empty change set.
+
+Every SAM parameter has a default for grading-only staging. Billing requires a Stripe secret and real test price IDs. Add `AlertEmail` for email notifications.
 
 ### Configure Stripe and email alerts
 
