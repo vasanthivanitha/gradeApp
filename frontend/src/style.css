@@ -244,3 +244,25 @@ dialog > .actions, dialog > .pricing-grid { margin-top: 15px; }
   .history-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .progress-grid { grid-template-columns: 1fr; }
 }
+
+.workshop-controls, .workshop-section { padding: clamp(16px, 3vw, 25px); margin-bottom: 16px; }
+.workshop-controls, .workshop-example, .workshop-parts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.workshop-section h2 { margin-bottom: 8px; }
+.workshop-example { margin: 14px 0; }
+.workshop-example > div, .workshop-draft { background: #191d2c; border-radius: 10px; padding: 14px; }
+.workshop-example h3, .workshop-draft h3 { margin: 0 0 5px; font-size: 1rem; color: var(--ink); }
+.workshop-form { display: grid; gap: 14px; margin-top: 15px; justify-items: start; }
+.workshop-form > :not(button) { width: 100%; min-width: 0; }
+.workshop-field, .workshop-focus { margin: 14px 0; }
+.workshop-form textarea, .workshop-field textarea { width: 100%; resize: vertical; padding: 10px; background: #191d2c; color: var(--ink); border: 1px solid #34374b; border-radius: 8px; font: inherit; }
+.workshop-checklist { display: grid; gap: 7px; border: 1px solid #34374b; border-radius: 9px; padding: 12px; }
+.workshop-checklist label { display: flex; flex-direction: row; align-items: center; gap: 8px; }
+.workshop-checklist input { width: auto; }
+.workshop-hint { font-size: .9rem; margin-top: 8px; }
+.workshop-signup > .button, .paragraph-practice > .button { margin-top: 10px; }
+@media (max-width: 560px) {
+  .workshop-controls, .workshop-example, .workshop-parts { grid-template-columns: 1fr; }
+}
+.workshop-sample { margin-top: 10px; }
+.workshop-sample summary { cursor: pointer; color: var(--green); }
+.workshop-sample p { margin-top: 6px; }

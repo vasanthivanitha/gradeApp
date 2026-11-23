@@ -17,7 +17,7 @@ BUCKET = os.environ['UPLOAD_BUCKET']
 TRIAL = 5
 KINDS = {
     'image/jpeg': 'jpeg', 'image/png': 'png', 'image/webp': 'webp',
-    'application/pdf': 'pdf',
+    'application/pdf': 'pdf', 'text/plain': 'txt',
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
 }
 SUBJECTS = ('English', 'Math', 'Science')

@@ -32,6 +32,8 @@ def handler(event, context):
             type(grade_level) is not int or not 0 <= grade_level <= 5):
         raise Problem(400, 'Choose Kindergarten or a grade from 1 through 5.')
     extension = KINDS[mime]
+    if extension == 'txt' and (assessment != 'writing' or size > 12000):
+        raise Problem(400, 'Typed writing drafts must be under 12 KB.')
     if extension in ('jpeg', 'png', 'webp') and size > int(os.environ['MAX_IMAGE_BYTES']):
         raise Problem(400, 'This grading model requires photos to be smaller. Resize the photo or upload a PDF.')
     if extension == 'pdf' and size > int(os.environ['MAX_PDF_BYTES']):

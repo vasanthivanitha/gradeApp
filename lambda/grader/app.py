@@ -31,6 +31,14 @@ def content(data, extension):
         if os.environ.get('PDF_CITATIONS') == 'true':
             document['citations'] = {'enabled': True}
         return {'document': document}
+    if extension == 'txt':
+        try:
+            text = data.decode('utf-8').strip()
+        except UnicodeDecodeError as exc:
+            raise Unreadable() from exc
+        if not text or len(data) > 12000:
+            raise Unreadable()
+        return {'text': 'Untrusted student writing:\n' + text}
     if extension == 'docx':
         with zipfile.ZipFile(io.BytesIO(data)) as archive:
             entries = archive.infolist()

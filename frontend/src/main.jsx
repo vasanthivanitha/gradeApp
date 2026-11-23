@@ -5,7 +5,8 @@ import { AlertCircle, BookOpen, Check, ChevronDown, CircleCheck, CreditCard, Fil
 import { config, login, register, request, resend, reset, session, signOut, upload, verify } from './auth'
 import '@fontsource-variable/sora'
 import '@fontsource-variable/jetbrains-mono'
-import { gradeLabel, gradeLevels, practiceFor, progressFor, subjects } from './practice'
+import { gradeLabel, gradeLevels, progressFor, subjects } from './practice'
+import { WritingWorkshop } from './WritingWorkshop'
 import './style.css'
 
 const AppContext = createContext(null)
@@ -23,6 +24,7 @@ function Brand() {
 function PublicHeader() {
   const { account } = useContext(AppContext)
   return <header className="header"><div className="nav-width"><Brand/><nav aria-label="Main navigation">
+    <NavLink to="/writing-practice">Writing practice</NavLink>
     <NavLink to="/pricing">Pricing</NavLink>
     {account ? <Link className="button primary small" to="/grade">Dashboard</Link> : <><Link to="/login">Sign in</Link><Link className="button primary small" to="/register">Start free</Link></>}
   </nav></div></header>
@@ -40,7 +42,7 @@ function Landing() {
         <div className="eyebrow"><Sparkles size={15}/> AI FEEDBACK FOR HOME LEARNING</div>
         <h1>Grade smarter.<br/><span>Learn together.</span></h1>
         <p>Turn your child’s answer sheets into clear scores and step-by-step feedback. See what clicked, where they struggled, and what to practice next.</p>
-        <div className="actions"><Link className="button primary" to={account ? '/grade' : '/register'}>{account ? 'Grade a sheet' : 'Start grading free'}</Link><Link className="button secondary" to="/pricing">See pricing</Link></div>
+        <div className="actions"><Link className="button primary" to={account ? '/grade' : '/register'}>{account ? 'Grade a sheet' : 'Start grading free'}</Link><Link className="button secondary" to={account ? '/practice' : '/writing-practice'}>Try writing practice</Link></div>
         <div className="hero-note"><CircleCheck size={16}/> 5 free sheets <span>·</span> No credit card required</div>
       </section>
       <div className="hero-art" aria-hidden="true">
@@ -210,9 +212,44 @@ function Dashboard() {
   return <><header className="header"><div className="nav-width"><Brand/><nav aria-label="Dashboard">
     <NavLink to="/grade"><UploadCloud size={17}/>Grade Sheet</NavLink>
     <NavLink to="/history"><FolderClock size={17}/>History</NavLink>
+    <NavLink to="/practice"><BookOpen size={17}/>Writing Practice</NavLink>
     <NavLink to="/billing"><CreditCard size={17}/>Billing</NavLink>
     <button className="button text-button" onClick={leave}><LogOut size={17}/>Sign Out</button>
   </nav></div></header><main className="content-width page workspace"><Usage usage={usage}/><Outlet/></main><Footer/></>
+}
+
+async function uploadForGrading(call, file, fields, onProgress) {
+  const info = await call('/uploads/presign', { method: 'POST', body: {
+    ...fields, fileType: file.type, fileName: file.candidate.name, size: file.candidate.size,
+  } })
+  await upload(info.uploadUrl, info.headers, file.candidate, onProgress)
+  return info.submissionId
+}
+
+function WorkshopPage({ publicPage = false }) {
+  const { account, call, refresh } = useContext(AppContext)
+  const { state } = useLocation()
+  const navigate = useNavigate()
+  const [progress, setProgress] = useState(null)
+  const [error, setError] = useState('')
+  async function assess({ draft, studentName, gradeLevel }) {
+    setProgress(0)
+    setError('')
+    try {
+      const type = 'text/plain'
+      const candidate = new File([draft], 'Paragraph draft.txt', { type })
+      const id = await uploadForGrading(call, { candidate, type }, {
+        studentName, subject: 'English', assessment: 'writing', gradeLevel,
+      }, setProgress)
+      refresh().catch(() => {})
+      navigate('/results/' + id, { state: { justUploaded: true } })
+    } catch (error) {
+      setError(error.message)
+      setProgress(null)
+    }
+  }
+  const content = <WritingWorkshop initial={state} account={account} onAssess={assess} error={error} progress={progress}/>
+  return publicPage ? <><PublicHeader/><main className="content-width page workspace">{content}</main><Footer/></> : content
 }
 
 function GradeSheet() {
@@ -245,15 +282,12 @@ function GradeSheet() {
     setError('')
     const fields = new FormData(event.target)
     try {
-      const info = await call('/uploads/presign', { method: 'POST', body: {
+      const id = await uploadForGrading(call, file, {
         studentName: fields.get('studentName'), subject: fields.get('subject'),
-        assessment,
-        gradeLevel: Number(fields.get('gradeLevel')),
-        fileType: file.type, fileName: file.candidate.name, size: file.candidate.size,
-      } })
-      await upload(info.uploadUrl, info.headers, file.candidate, setProgress)
+        assessment, gradeLevel: Number(fields.get('gradeLevel')),
+      }, setProgress)
       refresh().catch(() => {})
-      navigate('/results/' + info.submissionId, { state: { justUploaded: true } })
+      navigate('/results/' + id, { state: { justUploaded: true } })
     } catch (error) {
       setError(error.message)
       setProgress(null)
@@ -298,24 +332,17 @@ const rubricLevels = ['No evidence', 'Beginning', 'Developing', 'Meets expectati
 
 function WritingResult({ item }) {
   const focus = item.feedback.rubric.reduce((lowest, row) => row.earned < lowest.earned ? row : lowest)
-  const practice = practiceFor(focus.criterion, item.subject, item.gradeLevel)
   return <><div className="page-head"><h1>{item.subject} writing results</h1><p>{item.studentName} · {gradeLabel(item.gradeLevel)} · {item.fileName}</p></div>
     <section className="card result-overview">
       <div className="score-ring" style={{ '--score': item.scorePct + '%' }}><div><strong>{item.totalEarned}/{item.totalMax}</strong><span>Rubric points</span></div></div>
       <div><span className="grade-pill">{gradeLabel(item.gradeLevel)} rubric</span><h2>Writing feedback</h2><p>{item.feedback.overallFeedback}</p></div>
     </section>
     <section className="card paragraph-practice">
-      <h2>Write your next paragraph</h2>
-      <p>{item.gradeLevel <= 2
-        ? 'Think of a game you like. Say why you like it, then draw or write one detail.'
-        : 'Should your class have more outdoor learning time? State your opinion and support it with two reasons.'}</p>
-      <ol>
-        <li>{item.gradeLevel <= 2 ? 'Say your main idea out loud.' : 'Open with one sentence that tells the reader your main idea.'}</li>
-        <li>{item.gradeLevel <= 2 ? 'Add a detail that shows what you mean.' : 'Add a reason and a specific example. Use a transition to connect your ideas.'}</li>
-        <li>Read your work out loud. Check for complete sentences and ending punctuation.</li>
-      </ol>
+      <h2>Try a revision in the writing workshop</h2>
       <p><strong>Revision focus · {rubricLabels[focus.criterion]}</strong> {focus.suggestion}</p>
-      {practice && <PracticeLink resource={practice.resource}/>}
+      <Link className="button secondary small" to="/practice" state={{
+        focus: focus.criterion, suggestion: focus.suggestion, studentName: item.studentName, gradeLevel: item.gradeLevel,
+      }}>Practice this skill</Link>
     </section>
     <section className="writing-rubric">
       <div className="section-head"><h2>Rubric and revision suggestions</h2></div>
@@ -395,7 +422,7 @@ function PracticeLink({ resource }) {
   return <a className="practice-link" href={resource.url} target="_blank" rel="noopener noreferrer">{resource.title} ↗</a>
 }
 
-function StudentProgress({ rows, subject }) {
+function StudentProgress({ rows, subject, studentName }) {
   const displayedSubjects = subject ? subjects.filter((value) => value === subject) : subjects
   return <section className="progress-panel" aria-label="Student progress">
     <h2>Progress and practice</h2>
@@ -422,7 +449,12 @@ function StudentProgress({ rows, subject }) {
             {priorities.map((priority) => <div className="practice-priority" key={priority.key}>
               <strong>{priority.label}</strong>
               <small>{gradeLabel(priority.grade)} · Needs practice on {priority.misses} of {priority.total} assessed sheets</small>
-              <p>{priority.activity}</p><PracticeLink resource={priority.resource}/>
+              <p>{priority.activity}</p>
+              {name === 'English' && rubricLabels[priority.skill]
+                ? <Link className="practice-link" to="/practice" state={{
+                    focus: priority.skill, gradeLevel: priority.grade, studentName,
+                  }}>Practice in GradeAI</Link>
+                : <PracticeLink resource={priority.resource}/>}
             </div>)}</div>}
         </article>
       })}
@@ -511,7 +543,7 @@ function History() {
       <Link className="button secondary small" to="/grade" state={{
         studentName: current.studentName, gradeLevel: selectedGrade ? Number(selectedGrade) : current.gradeLevel,
       }}>Grade another sheet</Link></div>}
-    {current && (!subject || subjects.includes(subject)) && <StudentProgress rows={filteredRows} subject={subject}/>}
+    {current && (!subject || subjects.includes(subject)) && <StudentProgress rows={filteredRows} subject={subject} studentName={current.studentName}/>}
     {!current && rows.length > 0 && <p className="history-coverage">Select a student to see their progress and practice suggestions.</p>}
     {!loading && rows.length > 0 && filteredRows.length === 0 && <p>No sheets match these filters.</p>}
     {loading && <p role="status">Loading sheets…</p>}
@@ -640,11 +672,13 @@ function App() {
     <Routes>
       <Route path="/" element={<Landing/>}/>
       <Route path="/pricing" element={<Pricing/>}/>
+      <Route path="/writing-practice" element={<WorkshopPage publicPage/>}/>
       {['login', 'register', 'verify', 'reset'].map((mode) => <Route key={mode} path={'/' + mode} element={<AuthPage key={mode} mode={mode}/>}/>)}
       {Object.keys(policies).map((type) => <Route key={type} path={'/' + type} element={<Policy type={type}/>}/>)}
       <Route element={<Dashboard/>}>
         <Route path="/grade" element={<GradeSheet/>}/>
         <Route path="/history" element={<History/>}/>
+        <Route path="/practice" element={<WorkshopPage/>}/>
         <Route path="/billing" element={<Billing/>}/>
         <Route path="/results/:id" element={<Result/>}/>
       </Route>

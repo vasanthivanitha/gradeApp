@@ -50,7 +50,7 @@ export function progressFor(rows, subject) {
       const key = [row.gradeLevel ?? 'unknown', row.assessment || 'questions', result.skill].join('/')
       const needsPractice = result.earned / result.max < (row.assessment === 'writing' ? .75 : .7)
       if (!groups.has(key)) {
-        groups.set(key, { key, ...practice, grade: row.gradeLevel, recentNeedsPractice: needsPractice,
+        groups.set(key, { key, skill: result.skill, ...practice, grade: row.gradeLevel, recentNeedsPractice: needsPractice,
           total: 0, misses: 0, latestScore: result.earned / result.max })
       }
       const group = groups.get(key)
