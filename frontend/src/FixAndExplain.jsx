@@ -51,11 +51,12 @@ export default function FixAndExplain({ options, saved, onSave }) {
       </label>
       {!showComparison ? <button type="button" className="button secondary" disabled={!answer.trim()}
         onClick={() => setShowComparison(true)}>Compare my retry</button> : <>
-        <div className="workshop-example retry-comparison">
-          <div><h3>Your retry</h3><p>{answer}</p></div>
+        <div className={'workshop-example retry-comparison' + (choice.kind === 'writing' ? ' writing-comparison' : '')}>
+          {choice.kind === 'writing' && <div><h3>Original sentence</h3><p>{choice.original}</p></div>}
+          <div><h3>{choice.kind === 'writing' ? 'Your revision' : 'Your retry'}</h3><p>{answer}</p></div>
           <div><h3>{choice.kind === 'writing' ? 'One possible revision' : 'Reference answer'}</h3><p>{choice.reference}</p></div>
         </div>
-        <p>{choice.reason}</p>
+        <p>{choice.kind === 'writing' && <strong>What to check next · </strong>}{choice.reason}</p>
         <label>What did you change and why?
           <textarea rows={2} required maxLength={600} value={explanation} disabled={pending}
             onChange={(event) => setExplanation(event.target.value)}/>

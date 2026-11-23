@@ -1,3 +1,5 @@
+import re
+from fractions import Fraction
 from datetime import datetime
 from decimal import Decimal
 import io
@@ -105,6 +107,67 @@ QUESTION_SKILLS = {
 }
 
 
+def fraction_practice(subject, original):
+    if subject != 'Math':
+        return []
+    # Only classify simple fraction expressions we can recognize and check exactly.
+    match = re.fullmatch(r'(?:what is |calculate |solve |add )?(\d{1,2})\s*/\s*(\d{1,2})\s*\+\s*'
+                         r'(\d{1,2})\s*/\s*(\d{1,2})\s*[?=.]?', original.strip(), re.IGNORECASE)
+    if not match:
+        return []
+    a, b, c, d = map(int, match.groups())
+    if not (2 <= b == d <= 12 and 0 < a < b and 0 < c < d):
+        return []
+    items = []
+    for index, denom in enumerate([value for value in (4, 5, 6, 8, 10) if value != b][:2]):
+        left, right = 1, 2 + index
+        correct = Fraction(left + right, denom)
+        mistakes = [Fraction(left + right, denom * 2), Fraction(right, denom)]
+        choices = [str(value) for value in mistakes]
+        choices.insert(index + 1, str(correct))
+        items.append({'prompt': f'What is {left}/{denom} + {right}/{denom}?', 'choices': choices,
+                      'correctIndex': index + 1, 'explanation':
+                      f'Both fractions have denominator {denom}. Add {left} and {right}, keep {denom}, then simplify if needed.'})
+    return items
+
+
+def practice_items(value, original):
+    if not isinstance(value, list):
+        return []
+    seen = {' '.join(original.lower().split()).rstrip('?.!')}
+    items = []
+    for entry in value[:2]:
+        if not isinstance(entry, dict):
+            continue
+        choices = entry.get('choices')
+        answer = entry.get('correctIndex')
+        if not isinstance(choices, list) or len(choices) != 3 or type(answer) is not int or not 0 <= answer < 3:
+            continue
+        try:
+            prompt = feedback_text(entry.get('prompt'), 240)
+            explanation = feedback_text(entry.get('explanation'), 220)
+            choices = [feedback_text(choice, 180) for choice in choices]
+        except ValueError:
+            continue
+        signature = ' '.join(prompt.lower().split()).rstrip('?.!')
+        if signature in seen or len({choice.casefold() for choice in choices}) != 3:
+            continue
+        seen.add(signature)
+        items.append({'prompt': prompt, 'choices': choices, 'correctIndex': answer, 'explanation': explanation})
+    return items
+
+
+PRACTICE_PROMPT = (
+    ' When space permits, give each missed or partially correct question (or writing revision example) a '
+    'practice array of two new multiple-choice problems testing the exact same skill at the same grade level. '
+    'Use different numbers, sentences or examples for each problem. Independently solve and check each answer. '
+    'Each entry has prompt, choices (three distinct strings, exactly one right), correctIndex (0, 1, or 2), '
+    'and a brief explanation. Make the two prompts distinct. Keep prompts under 240 characters, choices '
+    'under 180, and explanations under 220. Leave practice empty if you cannot create reliable examples. '
+    'Always complete the grading output first; extra practice is optional.'
+)
+
+
 def writing_revisions(result, source_text):
     revisions = []
     examples = result.get('revisionExamples')
@@ -128,7 +191,11 @@ def writing_revisions(result, source_text):
         if quote in seen or quote == ' '.join(revised.split()) or (source is not None and quote not in source):
             continue
         seen.add(quote)
-        revisions.append({'criterion': criterion, 'original': original, 'revised': revised, 'why': reason})
+        revision = {'criterion': criterion, 'original': original, 'revised': revised, 'why': reason}
+        practice = practice_items(example.get('practice'), original)
+        if practice:
+            revision['practice'] = practice
+        revisions.append(revision)
         if len(revisions) == 3:
             break
     return revisions
@@ -220,7 +287,12 @@ def parse(raw, subject=None):
                 raise ValueError('Invalid question field')
             fields[field] = value.strip()
         earned = POINTS[status]
-        normalized.append({**fields, 'status': status, 'earned': earned, 'max': 10})
+        row = {**fields, 'status': status, 'earned': earned, 'max': 10}
+        if status != 'correct':
+            practice = fraction_practice(subject, fields['question']) or practice_items(question.get('practice'), fields['question'])
+            if practice:
+                row['practice'] = practice
+        normalized.append(row)
         skill = question.get('skill')
         if skill in allowed_skills:
             points = skill_points.setdefault(skill, {'skill': skill, 'earned': 0, 'max': 0})
@@ -265,7 +337,7 @@ def grade(sheet, subject, context, totals, grade_level=None, assessment='questio
         if context.get_remaining_time_in_millis() < 125000:
             raise TimeoutError()
         result = bedrock.converse(modelId=os.environ['MODEL_ID'],
-            system=[{'text': prompt}], messages=[{'role': 'user', 'content': [sheet,
+            system=[{'text': prompt + (PRACTICE_PROMPT if attempt == 0 else '')}], messages=[{'role': 'user', 'content': [sheet,
                 {'text': 'Grade the attached work and return valid JSON only.'}]}],
             inferenceConfig={'temperature': 0.2, 'maxTokens': int(os.environ['MODEL_OUTPUT_TOKENS'])})
         usage = result['usage']

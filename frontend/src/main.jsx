@@ -9,6 +9,7 @@ import { gradeLabel, gradeLevels, progressFor, subjects } from './practice'
 import { WritingWorkshop } from './WritingWorkshop'
 import { prepareSheetPhoto } from './sheetPhoto'
 import FixAndExplain from './FixAndExplain'
+import PracticeQuestion from './PracticeQuestion'
 import './style.css'
 
 const AppContext = createContext(null)
@@ -259,6 +260,19 @@ function WorkshopPage({ publicPage = false }) {
   return publicPage ? <><PublicHeader/><main className="content-width page workspace">{content}</main><Footer/></> : content
 }
 
+function SheetThumbnail({ file }) {
+  const [url, setUrl] = useState('')
+  useEffect(() => {
+    if (!file.type.startsWith('image/')) return
+    const preview = URL.createObjectURL(file.candidate)
+    setUrl(preview)
+    return () => URL.revokeObjectURL(preview)
+  }, [file])
+  return url ? <a href={url} target="_blank" rel="noreferrer" aria-label={'Open preview of ' + file.candidate.name}>
+    <img className="batch-thumbnail" src={url} alt="Worksheet preview"/>
+  </a> : <FileText size={24}/>
+}
+
 function GradeSheet() {
   const { call, refresh } = useContext(AppContext)
   const navigate = useNavigate()
@@ -267,65 +281,74 @@ function GradeSheet() {
   const picker = useRef(null)
   const camera = useRef(null)
   const [assessment, setAssessment] = useState('questions')
-  const [file, setFile] = useState(null)
+  const nextFileId = useRef(0)
+  const [files, setFiles] = useState([])
   const [error, setError] = useState('')
   const [dragging, setDragging] = useState(false)
   const [progress, setProgress] = useState(null)
   const [preparing, setPreparing] = useState(false)
-  const [preview, setPreview] = useState('')
   const busy = preparing || progress !== null
-  useEffect(() => {
-    if (!file?.type.startsWith('image/')) {
-      setPreview('')
-      return
-    }
-    const url = URL.createObjectURL(file.candidate)
-    setPreview(url)
-    return () => URL.revokeObjectURL(url)
-  }, [file])
-  async function pick(candidate, fromCamera = false) {
-    if (!candidate || busy) return
-    const extension = candidate.name.split('.').at(-1).toLowerCase()
-    const type = formats[extension]
-    const photo = fromCamera || type?.startsWith('image/') || candidate.type.startsWith('image/')
-    if (!candidate.size || candidate.size > 20 * 1024 ** 2 || (!type && !photo)) {
-      setError('Choose a photo, PDF, or DOCX up to 20 MB.')
-      return
-    }
-    setError('')
-    if (!photo) {
-      setFile({ candidate, type })
-      return
-    }
+  const batchLimit = 10
+
+  async function pick(candidates, fromCamera = false) {
+    if (!candidates.length || busy) return
     setPreparing(true)
-    try {
-      setFile(await prepareSheetPhoto(candidate, type))
-    } catch (error) {
-      setError(error.message)
-    } finally {
-      setPreparing(false)
+    const selected = Array.from(candidates)
+    const available = batchLimit - files.length
+    const problems = selected.length > available ? ['You can grade up to 10 files at a time.'] : []
+    const additions = []
+    for (const candidate of selected.slice(0, available)) {
+      const extension = candidate.name.split('.').at(-1).toLowerCase()
+      const type = formats[extension]
+      const photo = fromCamera || type?.startsWith('image/') || candidate.type.startsWith('image/')
+      if (!candidate.size || candidate.size > 20 * 1024 ** 2 || (!type && !photo)) {
+        problems.push(candidate.name + ' must be a supported file up to 20 MB.')
+        continue
+      }
+      try {
+        const file = photo ? await prepareSheetPhoto(candidate, type) : { candidate, type }
+        additions.push({ ...file, key: nextFileId.current++ })
+      } catch (error) {
+        problems.push(candidate.name + ': ' + error.message)
+      }
     }
+    setFiles((previous) => [...previous, ...additions])
+    setPreparing(false)
+    setError(problems.join(' '))
   }
+
   async function send(event) {
     event.preventDefault()
     if (busy) return
-    if (!file) return setError('Take a photo or choose a file before grading.')
+    if (!files.length) return setError('Take a photo or choose a file before grading.')
+    const fields = new FormData(event.currentTarget)
+    const settings = { studentName: fields.get('studentName'), subject: fields.get('subject'),
+      assessment, gradeLevel: Number(fields.get('gradeLevel')) }
     setProgress(0)
     setError('')
-    const fields = new FormData(event.target)
-    try {
-      const id = await uploadForGrading(call, file, {
-        studentName: fields.get('studentName'), subject: fields.get('subject'),
-        assessment, gradeLevel: Number(fields.get('gradeLevel')),
-      }, setProgress)
-      refresh().catch(() => {})
-      navigate('/results/' + id, { state: { justUploaded: true } })
-    } catch (error) {
-      setError(error.message)
-      setProgress(null)
+    const ids = []
+    for (const file of files) {
+      try {
+        const id = await uploadForGrading(call, file, settings,
+          (percent) => setProgress(Math.round((ids.length + percent / 100) / files.length * 100)))
+        ids.push(id)
+      } catch (error) {
+        const message = file.candidate.name + ': ' + error.message
+        if (!ids.length) {
+          setError(message)
+          setProgress(null)
+          return
+        }
+        refresh().catch(() => {})
+        navigate('/batch?ids=' + ids.join(','), { state: { issue: message + ' Later files were not submitted.' } })
+        return
+      }
     }
+    refresh().catch(() => {})
+    navigate(ids.length === 1 ? '/results/' + ids[0] : '/batch?ids=' + ids.join(','),
+      { state: { justUploaded: true } })
   }
-  return <><div className="page-head"><h1>Grade a sheet</h1><p>Upload a question sheet or get grade-level feedback on a writing sample.</p></div>
+  return <><div className="page-head"><h1>Grade a sheet</h1><p>Add up to 10 photos or files for the same student, subject, and grade. Each file is graded as one sheet.</p></div>
     <form className="card upload-form" onSubmit={send}>
       <div className="form-row"><label>Student nickname<input name="studentName" placeholder="e.g. Alex" defaultValue={state?.studentName || ''} required maxLength={40} disabled={busy}/></label>
       <label>Subject<select name="subject" required defaultValue="" disabled={busy}
@@ -339,29 +362,31 @@ function GradeSheet() {
         </select></label>
       </div>
       <div className={'drop-zone' + (dragging ? ' dragging' : '')} onDragOver={(event) => { event.preventDefault(); setDragging(true) }} onDragLeave={() => setDragging(false)}
-        onDrop={(event) => { event.preventDefault(); setDragging(false); pick(event.dataTransfer.files[0]) }}>
-        <input ref={picker} type="file" hidden accept={Object.keys(formats).map((format) => '.' + format).join(',')} onChange={(event) => { pick(event.target.files[0]); event.target.value = '' }}/>
+        onDrop={(event) => { event.preventDefault(); setDragging(false); pick(event.dataTransfer.files) }}>
+        <input ref={picker} type="file" hidden multiple accept={Object.keys(formats).map((format) => '.' + format).join(',')}
+          onChange={(event) => { pick(event.target.files); event.target.value = '' }}/>
         <input ref={camera} type="file" hidden accept="image/*" capture="environment"
-          onChange={(event) => { pick(event.target.files[0], true); event.target.value = '' }}/>
-        {preview ? <img className="sheet-preview" src={preview} alt="Preview of the worksheet photo"/> :
-          <span className="tile">{file ? <FileText size={24}/> : <UploadCloud size={24}/>}</span>}
-        <strong>{file ? file.candidate.name : 'Add your child’s work'}</strong>
-        <p>{file ? (file.candidate.size / 1024 ** 2).toFixed(2) + ' MB' : 'Take a photo or choose a JPEG, PNG, WebP, PDF, or DOCX.'}</p>
-        {preview && <p>Check that the entire page is visible and the writing is readable.</p>}
-        {preparing && <p role="status">Preparing your photo…</p>}
+          onChange={(event) => { pick(event.target.files, true); event.target.value = '' }}/>
+        <span className="tile"><UploadCloud size={24}/></span>
+        <strong>{files.length ? files.length + ' of 10 files ready' : 'Add your child’s work'}</strong>
+        <p>Take photos one at a time or select several PDFs, Word documents, or images.</p>
+        {preparing && <p role="status">Preparing your files…</p>}
         <div className="actions upload-options">
-          <button type="button" className="button secondary" disabled={busy} onClick={() => camera.current.click()}>
-            <Camera size={18}/>{preview ? 'Retake photo' : 'Take photo'}</button>
-          <button type="button" className="button secondary" disabled={busy} onClick={() => picker.current.click()}>
-            <FileText size={18}/>{file ? 'Change file' : 'Choose file'}</button>
-          {file && <button type="button" className="button text-button" disabled={busy}
-            onClick={() => { setFile(null); setError('') }}>Remove file</button>}
+          <button type="button" className="button secondary" disabled={busy || files.length >= batchLimit} onClick={() => camera.current.click()}>
+            <Camera size={18}/>{files.length ? 'Take another photo' : 'Take photo'}</button>
+          <button type="button" className="button secondary" disabled={busy || files.length >= batchLimit} onClick={() => picker.current.click()}>
+            <FileText size={18}/>Choose files</button>
         </div>
+        {files.length > 0 && <ul className="upload-file-list">{files.map((file) => <li key={file.key}>
+          <SheetThumbnail file={file}/><span>{file.candidate.name}</span>
+          <button type="button" className="button text-button" disabled={busy} aria-label={'Remove ' + file.candidate.name}
+            onClick={() => setFiles((previous) => previous.filter((entry) => entry.key !== file.key))}>Remove</button>
+        </li>)}</ul>}
       </div>
       <Notice text={error}/>
       {progress !== null && <div role="status" className="progress"><progress aria-label="Upload progress" max="100" value={progress}/><span>Uploading {progress}%</span></div>}
       <p className="privacy-note"><ShieldCheck size={18}/> Use a first name or nickname. Remove full names, school names, birth dates, and faces before uploading. Original files expire after 30 days.</p>
-      <button className="button primary grade-submit" disabled={busy}><Sparkles size={17}/>{progress === null ? 'Grade this sheet' : 'Uploading…'}</button>
+      <button className="button primary grade-submit" disabled={busy}><Sparkles size={17}/>{progress === null ? (files.length > 1 ? 'Grade ' + files.length + ' sheets' : 'Grade this sheet') : 'Uploading…'}</button>
     </form></>
 }
 
@@ -386,6 +411,76 @@ function RetryDemo() {
   return <><PublicHeader/><main className="content-width page workspace"><FixAndExplain options={demoRetry}/></main><Footer/></>
 }
 
+function BatchResults() {
+  const { call, refresh } = useContext(AppContext)
+  const { search, state } = useLocation()
+  const ids = [...new Set((new URLSearchParams(search).get('ids') || '').split(',')
+    .filter((id) => /^[a-f0-9-]{36}$/.test(id)).slice(0, 10))]
+  const key = ids.join(',')
+  const [rows, setRows] = useState({})
+  useEffect(() => {
+    const controller = new AbortController()
+    const remaining = new Map(key ? key.split(',').map((id) => [id, 0]) : [])
+    let timer
+    setRows({})
+    async function poll() {
+      await Promise.all([...remaining].map(async ([id, retries]) => {
+        let row
+        try {
+          row = await call('/submissions/' + id, { signal: controller.signal })
+          if (['done', 'error'].includes(row.status)) remaining.delete(id)
+          else remaining.set(id, 0)
+        } catch (error) {
+          if (controller.signal.aborted) return
+          if (retries < 5 && (!error.status || error.status === 404 || error.status === 429 || error.status >= 500)) {
+            remaining.set(id, retries + 1)
+            return
+          }
+          remaining.delete(id)
+          row = { status: 'unavailable', errorMessage: error.message }
+        }
+        if (!controller.signal.aborted) setRows((current) => ({ ...current, [id]: row }))
+      }))
+      if (controller.signal.aborted) return
+      if (remaining.size) timer = setTimeout(poll, 3000)
+      else refresh().catch(() => {})
+    }
+    if (remaining.size) poll()
+    return () => { controller.abort(); clearTimeout(timer) }
+  }, [key, call, refresh])
+  const completed = ids.map((id) => rows[id]).filter((row) => row?.status === 'done')
+  const counts = questionCounts(completed.flatMap((row) => row.feedback.questions || []))
+  const pending = ids.filter((id) => !['done', 'error', 'unavailable'].includes(rows[id]?.status)).length
+  return <><div className="page-head"><h1>Batch results</h1><p>{completed.length} of {ids.length} sheets graded</p></div>
+    <Notice text={state?.issue}/>
+    {pending > 0 && <p role="status">{pending} {pending === 1 ? 'sheet is' : 'sheets are'} still processing.</p>}
+    {completed.some((row) => row.feedback.questions?.length) && <QuestionCounts counts={counts}/>}
+    {completed.some((row) => row.assessment === 'writing') && <p>Writing samples have individual rubric scores.</p>}
+    {!ids.length && <p>No sheets in this batch.</p>}
+    <ul className="batch-results">{ids.map((id, index) => {
+      const row = rows[id]
+      return <li className="card" key={id}>
+        <div><strong>{row?.fileName || 'Sheet ' + (index + 1)}</strong>
+          <p>{row?.status === 'done' ? row.assessment === 'writing'
+            ? row.totalEarned + '/' + row.totalMax + ' rubric points' : row.scorePct + '%'
+            : row?.errorMessage || 'Waiting for grading'}</p></div>
+        {row && row.status !== 'unavailable' && <Link to={'/results/' + id}>See feedback</Link>}
+      </li>
+    })}</ul><Link to="/grade">Grade more sheets</Link></>
+}
+
+function questionCounts(questions) {
+  const counts = { correct: 0, partial: 0, incorrect: 0 }
+  for (const { status } of questions) if (Object.hasOwn(counts, status)) counts[status]++
+  return counts
+}
+
+function QuestionCounts({ counts }) {
+  const labels = { correct: 'Correct', partial: 'Partially correct', incorrect: 'Missed' }
+  return <div className="stat-grid" aria-label="Question totals">{Object.entries(counts).map(([status, count]) =>
+    <div className={'card stat ' + status} key={status}><span>{labels[status]}</span><strong>{count}</strong></div>)}</div>
+}
+
 function SheetRetry({ item, onSave }) {
   const examples = item.feedback.revisionExamples || []
   const questions = item.feedback.questions || []
@@ -399,7 +494,19 @@ function SheetRetry({ item, onSave }) {
     prompt: question.question, original: question.studentAnswer,
     reference: question.correctAnswer, reason: question.explanation,
   }] : [])
-  return options.length > 0 && <FixAndExplain key={item.submissionId} options={options} saved={item.retry} onSave={onSave}/>
+  const source = item.retry?.kind === 'writing' ? examples[item.retry.index] : questions[item.retry?.index]
+  const followUp = source?.practice?.[1]
+  const due = item.followUpDueAt
+  return options.length > 0 && <>
+    <FixAndExplain key={item.submissionId} options={options} saved={item.retry} onSave={onSave}/>
+    {followUp && due && <section className="card retry-card">
+      <h2>Try a different question later</h2>
+      {item.followUp || due * 1000 <= Date.now() ? <PracticeQuestion
+        key={item.retry.kind + ':' + item.retry.index} question={followUp} answer={item.followUp}
+        title="Same skill, new question" onAnswer={(choice) => onSave({ action: 'followUp', choice })}/>
+        : <p>Come back {date(due)} for a new question on the same skill. You can find it in Student History.</p>}
+    </section>}
+  </>
 }
 
 function WritingResult({ item, onSave }) {
@@ -420,6 +527,7 @@ function WritingResult({ item, onSave }) {
           <div><h4>One possible revision</h4><p>{example.revised}</p></div>
         </div>
         <p><strong>Why it helps</strong> {example.why}</p>
+        {example.practice?.[0] && <PracticeQuestion question={example.practice[0]}/>}
       </article>)}
       {paragraphSteps?.length > 0 && <div className="paragraph-revision">
         <h3>What to change in the paragraph</h3>
@@ -494,18 +602,20 @@ function Result() {
   if (item.feedback.rubric) return <WritingResult item={item} onSave={saveRetry}/>
   const questions = item.feedback.questions
   const all = expanded.length === questions.length
-  const counts = Object.fromEntries(['correct', 'partial', 'incorrect'].map((status) => [status, questions.filter((question) => question.status === status).length]))
+  const counts = questionCounts(questions)
   return <><div className="page-head"><h1>{item.subject} results</h1><p>{item.studentName} · {gradeLabel(item.gradeLevel)} · {item.fileName}</p></div>
     <section className="card result-overview"><div className="score-ring" style={{ '--score': item.scorePct + '%' }}><div><strong>{item.scorePct}%</strong><span>{item.totalEarned} / {item.totalMax} points</span></div></div>
       <div><span className="grade-pill">Grade {item.grade}</span><h2>{item.feedback.encouragement}</h2><p>{item.feedback.overallFeedback}</p></div></section>
-    <div className="stat-grid">{Object.entries(counts).map(([status, count]) => <div className={'card stat ' + status} key={status}><span>{status}</span><strong>{count}</strong></div>)}</div>
+    <QuestionCounts counts={counts}/>
     <SheetRetry item={item} onSave={saveRetry}/>
     <section><div className="section-head"><h2>Question breakdown</h2><button className="button secondary small" onClick={() => setExpanded(all ? [] : questions.map((_, index) => index))}>{all ? 'Collapse All' : 'Expand All'}</button></div>
     {questions.map((question, index) => {
       const open = expanded.includes(index)
       return <article key={index} className="card question"><button className="question-toggle" type="button" aria-expanded={open} aria-controls={'question-' + index} onClick={() => setExpanded(open ? expanded.filter((i) => i !== index) : [...expanded, index])}>
         <span>{index + 1}. {question.question}</span><span className={'question-status ' + question.status}>{question.earned}/{question.max} · {question.status}</span><ChevronDown size={18}/></button>
-        <div id={'question-' + index} className="question-body" hidden={!open}><dl><div><dt>Student answer</dt><dd>{question.studentAnswer}</dd></div><div><dt>Correct answer</dt><dd>{question.correctAnswer}</dd></div><div><dt>Explanation</dt><dd>{question.explanation}</dd></div></dl></div></article>
+        <div id={'question-' + index} className="question-body" hidden={!open}><dl><div><dt>Student answer</dt><dd>{question.studentAnswer}</dd></div><div><dt>Correct answer</dt><dd>{question.correctAnswer}</dd></div><div><dt>Explanation</dt><dd>{question.explanation}</dd></div></dl>
+          {open && question.practice?.[0] && <PracticeQuestion question={question.practice[0]}/>}
+        </div></article>
     })}</section></>
 }
 
@@ -515,8 +625,22 @@ function PracticeLink({ resource }) {
 
 function StudentProgress({ rows, subject, studentName }) {
   const displayedSubjects = subject ? subjects.filter((value) => value === subject) : subjects
+  const recentRows = rows.filter((row) => Date.parse(row.createdAt) >= Date.now() - 90 * 86400000)
+  const focus = displayedSubjects.flatMap((name) => progressFor(recentRows, name).priorities
+    .map((priority) => ({ ...priority, subject: name })))
+    .filter((priority) => priority.misses > 1)
+    .sort((a, b) => b.misses - a.misses || a.latestScore - b.latestScore)[0]
   return <section className="progress-panel" aria-label="Student progress">
     <h2>Progress and practice</h2>
+    {focus && <section className="card retry-card">
+      <h3>One thing to practice this week</h3>
+      <p><strong>{focus.subject} · {focus.label}</strong> needed practice on {focus.misses} of {focus.total} assessed sheets in the last 90 days.</p>
+      <p>{focus.activity}</p>
+      <div className="actions">
+        <Link to={'/results/' + focus.sources[0]}>Open feedback and practice</Link>
+        {focus.sources.slice(1).map((id, index) => <Link key={id} to={'/results/' + id}>Related sheet {index + 1}</Link>)}
+      </div>
+    </section>}
     <div className="progress-grid">
       {displayedSubjects.map((name) => {
         const { completed, comparable, priorities, hasSkillData } = progressFor(rows, name)
@@ -640,7 +764,9 @@ function History() {
     {loading && <p role="status">Loading sheets…</p>}
     {!loading && !error && !rows.length && !cursor && <section className="card grading"><FolderClock size={31}/><h2>No sheets yet</h2><Link className="button primary" to="/grade">Grade a sheet</Link></section>}
     {[...groups.values()].map((group) => <section className="history-group" key={group[0].studentName}><h2>{current ? 'Submissions' : group[0].studentName}</h2>
-      {group.map((row) => <div className="card history-row" key={row.submissionId}><Link to={'/results/' + row.submissionId}><span className="tile"><FileText size={18}/></span><span><strong>{row.subject}{row.retrySavedAt && <span className="history-retry"> · Retry saved</span>}</strong><small>{gradeLabel(row.gradeLevel)} · {row.fileName} · {new Date(row.createdAt).toLocaleDateString()}</small></span></Link>
+      {group.map((row) => <div className="card history-row" key={row.submissionId}><Link to={'/results/' + row.submissionId}><span className="tile"><FileText size={18}/></span><span><strong>{row.subject}{row.retrySavedAt && <span className="history-retry"> · {row.followUpCompletedAt ? 'Follow-up complete'
+          : row.followUpDueAt ? (row.followUpDueAt * 1000 <= Date.now() ? 'Follow-up ready' : 'Follow-up ' + date(row.followUpDueAt))
+          : 'Retry saved'}</span>}</strong><small>{gradeLabel(row.gradeLevel)} · {row.fileName} · {new Date(row.createdAt).toLocaleDateString()}</small></span></Link>
         <span className="status">{row.status === 'done' ? row.assessment === 'writing' ? row.totalEarned + '/' + row.totalMax + ' rubric points' : row.scorePct + '% · ' + row.grade : row.status === 'error' ? 'Unable to grade' : row.status}</span>
         <button className="button icon-button" aria-label={'Delete ' + row.fileName} onClick={() => setDeleting(row)}><Trash2 size={17}/></button></div>)}
     </section>)}
@@ -770,6 +896,7 @@ function App() {
       <Route element={<Dashboard/>}>
         <Route path="/grade" element={<GradeSheet/>}/>
         <Route path="/history" element={<History/>}/>
+        <Route path="/batch" element={<BatchResults/>}/>
         <Route path="/practice" element={<WorkshopPage/>}/>
         <Route path="/billing" element={<Billing/>}/>
         <Route path="/results/:id" element={<Result/>}/>

@@ -8,45 +8,89 @@ from grade_common import (
 )
 
 PUBLIC = ('submissionId', 'studentName', 'subject', 'fileName', 'status', 'createdAt',
-          'scorePct', 'grade', 'totalEarned', 'totalMax', 'feedback', 'errorMessage', 'reservation', 'assessment', 'gradeLevel', 'skillBreakdown', 'retrySavedAt')
+          'scorePct', 'grade', 'totalEarned', 'totalMax', 'feedback', 'errorMessage', 'reservation', 'assessment', 'gradeLevel', 'skillBreakdown', 'retrySavedAt', 'followUpDueAt', 'followUpCompletedAt')
 
 
 def view(item, summary=False):
-    fields = PUBLIC if summary else (*PUBLIC, 'retry')
+    fields = PUBLIC if summary else (*PUBLIC, 'retry', 'followUp')
     return {k: item[k] for k in fields if k in item and (not summary or k != 'feedback')}
+
+
+def retry_option(feedback, kind, index):
+    options = feedback.get({'writing': 'revisionExamples', 'question': 'questions'}.get(kind, ''), []) if isinstance(kind, str) else []
+    if (type(index) is not int or not 0 <= index < len(options) or
+            (kind == 'question' and options[index].get('status') not in ('incorrect', 'partial'))):
+        raise Problem(400, 'Choose an item from this sheet to retry.')
+    return options[index]
+
+
+def save_follow_up(data, uid, row):
+    current = row.get('retry', {})
+    if not current:
+        raise Problem(409, 'Save a retry first.')
+    seed = retry_option(row.get('feedback', {}), current['kind'], int(current['index']))
+    variants = seed.get('practice', [])
+    if len(variants) < 2 or not row.get('followUpDueAt') or row['followUpDueAt'] > int(time.time()):
+        raise Problem(409, 'This follow-up is not due yet.')
+    selected = data.get('choice')
+    variant = variants[1]
+    if type(selected) is not int or not 0 <= selected < len(variant['choices']):
+        raise Problem(400, 'Choose an answer before checking it.')
+    if row.get('followUp'):
+        return response(200, {'followUp': row['followUp'], 'followUpCompletedAt': row['followUpCompletedAt']})
+    answered = int(time.time())
+    result = {'choice': selected, 'correct': selected == variant['correctIndex']}
+    try:
+        db.update_item(Key=key(uid, row['SK']), UpdateExpression='SET followUp = :result, followUpCompletedAt = :now',
+            ConditionExpression='#status = :done AND #retry = :retry AND retrySavedAt = :stamp AND attribute_not_exists(followUp)',
+            ExpressionAttributeNames={'#status': 'status', '#retry': 'retry'},
+            ExpressionAttributeValues={':result': result, ':now': answered, ':done': 'done',
+                ':retry': current, ':stamp': row['retrySavedAt']})
+    except ClientError as exc:
+        if conflict(exc):
+            raise Problem(409, 'This retry has changed. Reopen the result and try again.') from exc
+        raise
+    return response(200, {'followUp': result, 'followUpCompletedAt': answered})
 
 
 def save_retry(event, uid, row):
     if row['status'] != 'done':
         raise Problem(409, 'Wait until grading finishes to save a retry.')
     data = payload(event)
+    if data.get('action') == 'followUp':
+        return save_follow_up(data, uid, row)
     kind, index = data.get('kind'), data.get('index')
-    feedback = row.get('feedback', {})
-    if kind == 'writing':
-        options = feedback.get('revisionExamples', [])
-    elif kind == 'question':
-        options = feedback.get('questions', [])
-    else:
-        options = []
-    if (type(index) is not int or not 0 <= index < len(options) or
-            (kind == 'question' and options[index].get('status') not in ('incorrect', 'partial'))):
-        raise Problem(400, 'Choose an item from this sheet to retry.')
+    option = retry_option(row.get('feedback', {}), kind, index)
     answer, explanation = data.get('answer'), data.get('explanation')
     if (not isinstance(answer, str) or not 1 <= len(answer.strip()) <= 1200 or
             not isinstance(explanation, str) or not 1 <= len(explanation.strip()) <= 600):
         raise Problem(400, 'Enter a new answer and a short explanation of what changed.')
     saved_at = int(time.time())
     retry = {'kind': kind, 'index': index, 'answer': answer.strip(), 'explanation': explanation.strip()}
+    same = row.get('retry', {}).get('kind') == kind and row.get('retry', {}).get('index') == index
+    updated = {'retry': retry, 'retrySavedAt': saved_at}
+    values = {':retry': retry, ':stamp': saved_at, ':done': 'done'}
+    changes = 'SET #retry = :retry, retrySavedAt = :stamp'
+    if len(option.get('practice', [])) >= 2:
+        due = (row.get('followUpDueAt') if same else None) or saved_at + 2 * 86400
+        updated['followUpDueAt'] = due
+        values[':due'] = due
+        changes += ', followUpDueAt = :due'
+    if not same:
+        changes += ' REMOVE followUp, followUpCompletedAt' + (', followUpDueAt' if ':due' not in values else '')
+        updated.update(followUp=None, followUpCompletedAt=None)
+    if ':due' not in values:
+        updated['followUpDueAt'] = None
     try:
-        db.update_item(Key=key(uid, row['SK']), UpdateExpression='SET #retry = :retry, retrySavedAt = :stamp',
+        db.update_item(Key=key(uid, row['SK']), UpdateExpression=changes,
             ConditionExpression='attribute_exists(PK) AND #status = :done',
             ExpressionAttributeNames={'#retry': 'retry', '#status': 'status'},
-            ExpressionAttributeValues={':retry': retry, ':stamp': saved_at, ':done': 'done'})
+            ExpressionAttributeValues=values)
     except ClientError as exc:
         if conflict(exc):
             raise Problem(409, 'This sheet is no longer available for retry.') from exc
         raise
-    return response(200, {'retry': retry, 'retrySavedAt': saved_at})
+    return response(200, updated)
 
 
 @endpoint

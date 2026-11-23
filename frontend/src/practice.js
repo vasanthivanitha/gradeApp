@@ -51,11 +51,14 @@ export function progressFor(rows, subject) {
       const needsPractice = result.earned / result.max < (row.assessment === 'writing' ? .75 : .7)
       if (!groups.has(key)) {
         groups.set(key, { key, skill: result.skill, ...practice, grade: row.gradeLevel, recentNeedsPractice: needsPractice,
-          total: 0, misses: 0, latestScore: result.earned / result.max })
+          total: 0, misses: 0, sources: [], latestScore: result.earned / result.max })
       }
       const group = groups.get(key)
       group.total++
-      if (needsPractice) group.misses++
+      if (needsPractice) {
+        group.misses++
+        if (group.sources.length < 3) group.sources.push(row.submissionId)
+      }
     }
   }
   const priorities = [...groups.values()].filter((group) => group.recentNeedsPractice)
