@@ -95,7 +95,7 @@ export function WritingWorkshop({ initial, account, onAssess, error, progress })
           {error && <p role="alert">{error}</p>}
           <button className="button primary" disabled={!draft || busy}>{busy ? 'Submitting draft…' : 'Grade my draft'}</button>
         </> : <div className="workshop-signup">
-          <p>Want feedback on your child’s own draft? Start with five free grades and track their writing progress in one place.</p>
+          <p>Want feedback on your child’s own draft? Start grading for free and track their writing progress in one place.</p>
           <Link className="button primary" to="/register">Start grading free</Link>
         </div>}
       </form>

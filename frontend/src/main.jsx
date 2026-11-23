@@ -45,7 +45,7 @@ function Landing() {
         <h1>Grade smarter.<br/><span>Learn together.</span></h1>
         <p>Turn your child’s answer sheets into clear scores and step-by-step feedback. Let your child retry a missed answer, explain what changed, and save the result for later.</p>
         <div className="actions"><Link className="button primary" to={account ? '/grade' : '/register'}>{account ? 'Grade a sheet' : 'Start grading free'}</Link><Link className="button secondary" to={account ? '/practice' : '/writing-practice'}>Try writing practice</Link></div>
-        <div className="hero-note"><CircleCheck size={16}/> 5 free sheets <span>·</span> No credit card required</div>
+        <div className="hero-note"><CircleCheck size={16}/> {config.unlimitedTrial ? 'Free testing' : '5 free sheets'} <span>·</span> No credit card required</div>
       </section>
       <div className="hero-art" aria-hidden="true">
         <div className="art-light"></div>
@@ -102,7 +102,7 @@ function Pricing({ modal = false }) {
   }
   const cards = <><Notice text={error}/><div className="pricing-grid">
     <article className="card plan"><span className="tile"><Sparkles size={19}/></span><h2>Free trial</h2>
-      <p className="price">$0</p><p>5 sheets total</p><p>No payment card required.</p>
+      <p className="price">$0</p><p>{config.unlimitedTrial ? 'Free grading during testing' : '5 sheets total'}</p><p>No payment card required.</p>
       {!account && <Link className="button secondary" to="/register">Start free</Link>}
     </article>
     {config.plans.map((plan) => <article className={'card plan ' + (plan.id === 'yearly' ? 'yearly' : '')} key={plan.id}>
@@ -115,7 +115,7 @@ function Pricing({ modal = false }) {
         <Link className="button secondary" to={'/register?plan=' + plan.id}>Choose {plan.name}</Link>}
     </article>)}
   </div></>
-  return modal ? cards : <><PublicHeader/><main className="content-width page"><div className="page-head"><h1>Pick your grading plan</h1><p>Start with five free sheets. Upgrade when you need more.</p></div>{cards}</main><Footer/></>
+  return modal ? cards : <><PublicHeader/><main className="content-width page"><div className="page-head"><h1>Pick your grading plan</h1><p>{config.unlimitedTrial ? 'Try grading for free during testing.' : 'Start with five free sheets. Upgrade when you need more.'}</p></div>{cards}</main><Footer/></>
 }
 
 function AuthPage({ mode }) {
@@ -170,7 +170,7 @@ function AuthPage({ mode }) {
     finally { setBusy(false) }
   }
   const titles = { register: 'Create your parent account', login: 'Welcome back', verify: 'Verify your email', reset: 'Reset your password' }
-  const descriptions = { register: 'Start with five free answer sheets.', login: 'Sign in to review and grade answer sheets.', verify: 'Enter the code sent to your email address.', reset: 'Use the email address on your parent account.' }
+  const descriptions = { register: config.unlimitedTrial ? 'Try grading for free during testing.' : 'Start with five free answer sheets.', login: 'Sign in to review and grade answer sheets.', verify: 'Enter the code sent to your email address.', reset: 'Use the email address on your parent account.' }
   return <><PublicHeader/><main className="auth-wrap"><section className="card auth">
     <span className="tile"><LockKeyhole size={20}/></span><h1>{titles[mode]}</h1><p>{descriptions[mode]}</p>
     <Notice text={error}/><Notice text={message || (location.state?.verified ? 'Email verified. You can now sign in.' : '')} neutral/>
@@ -190,6 +190,7 @@ function AuthPage({ mode }) {
 }
 
 function usageText(usage) {
+  if (usage.unlimited) return 'Free grading during testing'
   if (usage.plan === 'trial') return usage.remaining + ' of ' + usage.limit + ' free sheets left'
   return usage.used + ' of ' + usage.limit + ' used' + (usage.renewal ? ', renews ' + date(usage.renewal) : '')
 }
@@ -197,8 +198,8 @@ function usageText(usage) {
 function Usage({ usage }) {
   if (!usage) return null
   return <div className="usage card"><span className="tile"><Files size={19}/></span><div><strong>{usageText(usage)}</strong>
-    <p>{['past_due', 'canceled', 'unpaid'].includes(usage.subscriptionStatus) ? 'Your subscription is inactive.' : 'Your grading allowance'}</p></div>
-    <div className="usage-track" role="progressbar" aria-label="Grading allowance used" aria-valuemin={0} aria-valuemax={usage.limit} aria-valuenow={Math.min(usage.limit, usage.used)}><span style={{width: Math.min(100, usage.used / usage.limit * 100) + '%'}}/></div>
+    <p>{usage.unlimited ? 'Daily upload limit applies.' : ['past_due', 'canceled', 'unpaid'].includes(usage.subscriptionStatus) ? 'Your subscription is inactive.' : 'Your grading allowance'}</p></div>
+    {!usage.unlimited && <div className="usage-track" role="progressbar" aria-label="Grading allowance used" aria-valuemin={0} aria-valuemax={usage.limit} aria-valuenow={Math.min(usage.limit, usage.used)}><span style={{width: Math.min(100, usage.used / usage.limit * 100) + '%'}}/></div>}
     <Link to={usage.plan === 'trial' && !usage.hasBillingAccount ? '/pricing' : '/billing'}>{usage.plan === 'trial' && !usage.hasBillingAccount ? 'View plans' : 'Billing'}</Link>
   </div>
 }
@@ -465,7 +466,7 @@ function Result() {
         else {
           const usage = await refresh().catch(() => null)
           if (!controller.signal.aborted && state?.justUploaded && row.status === 'done' && row.reservation === 'trial' &&
-              usage?.plan === 'trial' && usage.trialCompleted === 5 && !sessionStorage.getItem('trial-modal:' + id)) {
+              usage?.plan === 'trial' && !usage.unlimited && usage.trialCompleted === 5 && !sessionStorage.getItem('trial-modal:' + id)) {
             sessionStorage.setItem('trial-modal:' + id, '1')
             setUpgrade('You’ve reached your free sheet allowance. Choose a plan to keep grading.')
           }
@@ -485,7 +486,7 @@ function Result() {
     <span className="spinner"/><h1>{item?.status === 'grading' ? 'Grading your sheet' : 'Preparing your sheet'}</h1>
     <p>Checking for updates every few seconds. You can reopen this sheet in History.</p>
   </section>
-  if (item.status === 'error') return <section className="card grading"><h1>Grading didn’t finish</h1><Notice text={item.errorMessage}/><p>Your sheet allowance has been restored.</p><Link className="button primary" to="/grade">Upload another copy</Link></section>
+  if (item.status === 'error') return <section className="card grading"><h1>Grading didn’t finish</h1><Notice text={item.errorMessage}/>{item.reservation !== 'testing' && <p>Your sheet allowance has been restored.</p>}<Link className="button primary" to="/grade">Upload another copy</Link></section>
   async function saveRetry(retry) {
     const result = await call('/submissions/' + id + '/retry', { method: 'POST', body: retry })
     setItem((current) => current?.submissionId === id ? { ...current, ...result } : current)
@@ -695,7 +696,7 @@ function Billing() {
 const policies = {
   terms: ['Terms of Service', [
     'GradeAI provides AI-generated educational feedback for home learning. A parent or guardian must hold the account and have permission to upload the work. Review AI feedback with your child before using it to guide study.',
-    'A verified account receives five trial sheets. Paid plans renew at the interval and price displayed at Checkout. Use the billing portal to manage or cancel renewal.',
+    'A verified account can grade for free under the trial limits shown on the site. Paid plans renew at the interval and price displayed at Checkout. Use the billing portal to manage or cancel renewal.',
     'Upload only work you have permission to share. Do not upload images of people, school names, or other personal details. You can delete a sheet in History and request account deletion in Account and Billing.',
   ]],
   privacy: ['Privacy Policy', [
@@ -704,7 +705,7 @@ const policies = {
     'Original uploads expire after 30 days. Grading history remains until you delete it or request account deletion. Stripe may retain transaction records to meet its obligations. Service metrics track grading usage, estimated AI cost, and reliability.',
   ]],
   refund: ['Refund Policy', [
-    'The five-sheet trial is free. Failed grading releases the reserved sheet allowance.',
+    'Trial grading is free. Failed grading releases any reserved sheet allowance.',
     'Cancel renewal through Manage subscription in Account and Billing. Paid access generally continues until the end of the current paid billing period. Cancelling renewal does not automatically issue a refund.',
     'For billing errors or refund requests, use the merchant support contact on your Stripe receipt. Any rights under applicable law still apply.',
   ]],

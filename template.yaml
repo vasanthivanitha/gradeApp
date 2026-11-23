@@ -86,6 +86,11 @@ Parameters:
     Default: 0
     MinValue: 0
     Description: Reserved Lambda concurrency. Zero uses the shared account pool.
+  UnlimitedTrial:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: Allow trial accounts to grade beyond five sheets during testing. Daily limits still apply.
   DailyCap:
     Type: Number
     Default: 20
@@ -428,12 +433,13 @@ Resources:
           DAILY_CAP: !Ref DailyCap
           MAX_IMAGE_BYTES: !Ref MaxImageBytes
           MAX_PDF_BYTES: !Ref MaxPdfBytes
+          UNLIMITED_TRIAL: !Ref UnlimitedTrial
           MONTHLY_QUOTA: !Ref MonthlyQuota
           YEARLY_QUOTA: !Ref YearlyQuota
       Policies:
         - Statement:
             - Effect: Allow
-              Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:UpdateItem]
+              Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:UpdateItem, dynamodb:ConditionCheckItem]
               Resource: !GetAtt Data.Arn
             - Effect: Allow
               Action: [s3:PutObject]
@@ -454,6 +460,7 @@ Resources:
       CodeUri: lambda/submissions
       Environment:
         Variables:
+          UNLIMITED_TRIAL: !Ref UnlimitedTrial
           MONTHLY_QUOTA: !Ref MonthlyQuota
           YEARLY_QUOTA: !Ref YearlyQuota
       Policies:
@@ -732,6 +739,7 @@ Outputs:
   StripeWebhookUrl: {Value: !Sub '${Api.ApiEndpoint}/billing/webhook'}
   PoolId: {Value: !Ref UserPool}
   ClientId: {Value: !Ref UserClient}
+  FrontendUnlimitedTrial: {Value: !Ref UnlimitedTrial}
   FrontendMonthlyQuota: {Value: !Ref MonthlyQuota}
   FrontendYearlyQuota: {Value: !Ref YearlyQuota}
   MonthlyName: {Value: !Ref MonthlyPlanName}

@@ -113,6 +113,9 @@ def entitlement(item, now):
     plan = item.get('plan', 'trial')
     end = int(item.get('periodEnd', 0))
     if plan not in ('monthly', 'yearly') or item.get('status') not in ('active', 'trialing') or now >= end:
+        if os.environ.get('UNLIMITED_TRIAL') == 'true':
+            return {'plan': 'trial', 'unlimited': True, 'limit': None, 'remaining': None,
+                    'renewal': None, 'subscriptionStatus': item.get('status', 'trial')}
         return {'plan': 'trial', 'limit': TRIAL, 'remaining': int(item['trialRemaining']),
                 'used': TRIAL - int(item['trialRemaining']), 'renewal': None,
                 'subscriptionStatus': item.get('status', 'trial')}
@@ -186,7 +189,8 @@ def finish(item, state, data, *, lease=None, expired_before=None):
                 refund = ('Update', {'Key': pkey, 'UpdateExpression': 'ADD trialRemaining :one',
                     'ConditionExpression': 'attribute_exists(PK) AND attribute_not_exists(deleting) AND trialRemaining < :limit',
                     'ExpressionAttributeValues': {':one': 1, ':limit': TRIAL}})
-            elif current.get('usageWindow') == item['reservedWindow'] and current.get('usedThisPeriod', 0) > 0:
+            elif (item['reservation'] == 'paid' and current.get('usageWindow') == item['reservedWindow']
+                  and current.get('usedThisPeriod', 0) > 0):
                 refund = ('Update', {'Key': pkey, 'UpdateExpression': 'ADD usedThisPeriod :minus',
                     'ConditionExpression': 'usageWindow = :window AND usedThisPeriod > :zero AND attribute_not_exists(deleting)',
                     'ExpressionAttributeValues': {':minus': -1, ':window': item['reservedWindow'], ':zero': 0}})

@@ -74,7 +74,9 @@ A five-minute S3 PUT URL binds the object key, exact byte length, media type, an
 - Sheet deletion is available after grading resolves. If an upload completes after deletion, the S3 event handler removes the orphaned object.
 - Cognito confirms email before the API accepts its ID token. API routes derive ownership exclusively from the verified token's subject. A Cognito WAF rule rate-limits direct signups per IP. Rate limits are approximate.
 
-## Verify the five-sheet trial
+## Test grading and restore the five-sheet trial
+
+New deployments allow free trial accounts to grade beyond five sheets during testing. The per-user daily cap still applies, and test sheets leave existing trial balances untouched. To restore the five-sheet cap, run `GRADEAI_UNLIMITED_TRIAL=false ./deploy.sh` and follow the checks below. To reopen testing, use `GRADEAI_UNLIMITED_TRIAL=true ./deploy.sh`.
 
 1. Register a parent test account, verify the email, and sign in. Check that **5 of 5 free sheets left** appears.
 2. Upload five readable answer sheets with known answers. Check the upload and grading states, manually verify points for correct, partial, and incorrect answers, and expand and collapse the results.

@@ -51,14 +51,17 @@ def handler(event, context):
         current = profile(uid)
         usage = entitlement(current, now)
         trial = usage['plan'] == 'trial'
-        if not usage['remaining']:
+        unlimited = usage.get('unlimited', False)
+        if not unlimited and not usage['remaining']:
             message = 'Your sheet allowance is used up.'
             if usage['subscriptionStatus'] in ('past_due', 'unpaid', 'canceled'):
                 message = 'Your subscription is inactive and no trial sheets remain.'
             raise Problem(402, message, code='QUOTA_EXHAUSTED', usage=usage)
         values = {':revision': current['revision']}
         check = 'revision = :revision AND attribute_not_exists(deleting)'
-        if trial:
+        if unlimited:
+            update = None
+        elif trial:
             update = 'ADD trialRemaining :minus'
             check += ' AND trialRemaining > :zero'
             values.update({':minus': -1, ':zero': 0})
@@ -73,16 +76,18 @@ def handler(event, context):
         item = {**key(uid, sk), 'submissionId': sid, 'studentName': name.strip(),
             'subject': subject, 'fileName': filename, 's3Key': object_key, 'fileType': mime,
             'size': size, 'status': 'uploading', 'createdAt': stamp,
-            'reservation': 'trial' if trial else 'paid', 'reservedWindow': usage.get('window', 0),
+            'reservation': 'testing' if unlimited else 'trial' if trial else 'paid', 'reservedWindow': usage.get('window', 0),
             'pending': 'OPEN', 'pendingUntil': now + 900}
         if assessment == 'writing':
             item['assessment'] = assessment
         if grade_level is not None:
             item['gradeLevel'] = grade_level
+        profile_write = {'Key': key(uid), 'ConditionExpression': check, 'ExpressionAttributeValues': values}
+        if update:
+            profile_write['UpdateExpression'] = update
         try:
             transact(
-                ('Update', {'Key': key(uid), 'UpdateExpression': update,
-                    'ConditionExpression': check, 'ExpressionAttributeValues': values}),
+                ('Update' if update else 'ConditionCheck', profile_write),
                 ('Update', {'Key': daily_key, 'UpdateExpression': 'SET expiresAt = :ttl ADD sheetCount :one',
                     'ConditionExpression': 'attribute_not_exists(sheetCount) OR sheetCount < :cap',
                     'ExpressionAttributeValues': {':ttl': now + 172800, ':one': 1,

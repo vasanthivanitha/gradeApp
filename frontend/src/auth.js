@@ -4,6 +4,7 @@ export const config = {
   api: import.meta.env.VITE_API_URL,
   pool: import.meta.env.VITE_POOL_ID,
   client: import.meta.env.VITE_CLIENT_ID,
+  unlimitedTrial: import.meta.env.VITE_UNLIMITED_TRIAL === 'true',
   plans: ['monthly', 'yearly'].map((id) => {
     const prefix = 'VITE_' + id.toUpperCase() + '_'
     const env = import.meta.env

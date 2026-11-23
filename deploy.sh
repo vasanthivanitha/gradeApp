@@ -47,10 +47,15 @@ printf 'Building Lambda functions and layers for %s in %s.\n' "$stack_name" "$st
 PIP_NO_CACHE_DIR=1 sam build --template-file template.yaml --no-cached \
   --build-dir "$deploy_dir/sam-build" --cache-dir "$deploy_dir/sam-cache"
 
+parameter_overrides=()
+if [[ -n ${GRADEAI_UNLIMITED_TRIAL:-} ]]; then
+  parameter_overrides=(--parameter-overrides "UnlimitedTrial=$GRADEAI_UNLIMITED_TRIAL")
+fi
+
 sam deploy --template-file "$deploy_dir/sam-build/template.yaml" \
   --stack-name "$stack_name" --region "$stack_region" \
   --config-env staging-defaults --resolve-s3 --capabilities CAPABILITY_IAM \
-  --confirm-changeset --no-fail-on-empty-changeset
+  --confirm-changeset --no-fail-on-empty-changeset "${parameter_overrides[@]}"
 
 # Keep node_modules, Vite output, and npm's download cache off CloudShell's home filesystem.
 mkdir "$deploy_dir/frontend"

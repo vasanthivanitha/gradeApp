@@ -27,6 +27,8 @@ VITE_MONTHLY_PRICE=$(out FrontendMonthlyDisplayPrice MonthlyDisplayPrice)
 VITE_YEARLY_PRICE=$(out FrontendYearlyDisplayPrice YearlyDisplayPrice)
 VITE_MONTHLY_QUOTA=$(out FrontendMonthlyQuota MonthlyQuota)
 VITE_YEARLY_QUOTA=$(out FrontendYearlyQuota YearlyQuota)
+VITE_UNLIMITED_TRIAL=$(jq -r '[.[] | select(.OutputKey == "FrontendUnlimitedTrial") | .OutputValue][0] // "false"' <<< "$stack_outputs")
+export VITE_UNLIMITED_TRIAL
 export VITE_API_URL VITE_POOL_ID VITE_CLIENT_ID VITE_MONTHLY_NAME VITE_YEARLY_NAME
 export VITE_MONTHLY_PRICE VITE_YEARLY_PRICE VITE_MONTHLY_QUOTA VITE_YEARLY_QUOTA
 site_bucket=$(out SiteBucket)
