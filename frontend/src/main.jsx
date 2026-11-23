@@ -8,6 +8,7 @@ import '@fontsource-variable/jetbrains-mono'
 import { gradeLabel, gradeLevels, progressFor, subjects } from './practice'
 import { WritingWorkshop } from './WritingWorkshop'
 import { prepareSheetPhoto } from './sheetPhoto'
+import FixAndExplain from './FixAndExplain'
 import './style.css'
 
 const AppContext = createContext(null)
@@ -42,7 +43,7 @@ function Landing() {
       <section className="hero-copy">
         <div className="eyebrow"><Sparkles size={15}/> AI FEEDBACK FOR HOME LEARNING</div>
         <h1>Grade smarter.<br/><span>Learn together.</span></h1>
-        <p>Turn your child’s answer sheets into clear scores and step-by-step feedback. See what clicked, where they struggled, and what to practice next.</p>
+        <p>Turn your child’s answer sheets into clear scores and step-by-step feedback. Let your child retry a missed answer, explain what changed, and save the result for later.</p>
         <div className="actions"><Link className="button primary" to={account ? '/grade' : '/register'}>{account ? 'Grade a sheet' : 'Start grading free'}</Link><Link className="button secondary" to={account ? '/practice' : '/writing-practice'}>Try writing practice</Link></div>
         <div className="hero-note"><CircleCheck size={16}/> 5 free sheets <span>·</span> No credit card required</div>
       </section>
@@ -60,6 +61,10 @@ function Landing() {
         <div className="art-badge art-feedback"><span><Sparkles size={20}/></span><div><strong>Per-question feedback</strong><small>Corrections and explanations</small></div></div>
       </div>
     </div>
+    <section className="card content-width retry-demo-invite">
+      <div><h2>One mistake can turn into a better answer</h2><p>Try Fix &amp; Explain with a sample question. No account needed.</p></div>
+      <Link className="button secondary" to="/try-a-retry">Try an example</Link>
+    </section>
     <section className="feature-section content-width" aria-labelledby="features"><h2 id="features">From upload to understanding</h2>
       <div className="feature-grid">
         <Feature icon={UploadCloud} title="Upload any answer sheet">Use your phone camera or upload a PDF or Word document for English, Math, or Science in grades K–5.</Feature>
@@ -368,7 +373,35 @@ const rubricLabels = {
 }
 const rubricLevels = ['No evidence', 'Beginning', 'Developing', 'Meets expectations', 'Exceeds expectations']
 
-function WritingResult({ item }) {
+const demoRetry = [{
+  key: 'question:0', kind: 'question', index: 0, label: 'Fraction addition',
+  prompt: 'What is one fourth plus another one fourth?',
+  original: 'Two eighths.',
+  reference: 'Two fourths, which is equal to one half.',
+  reason: 'Both pieces are fourths, so count two pieces and keep the size of each piece the same.',
+}]
+
+function RetryDemo() {
+  return <><PublicHeader/><main className="content-width page workspace"><FixAndExplain options={demoRetry}/></main><Footer/></>
+}
+
+function SheetRetry({ item, onSave }) {
+  const examples = item.feedback.revisionExamples || []
+  const questions = item.feedback.questions || []
+  const options = examples.length ? examples.map((example, index) => ({
+    key: 'writing:' + index, kind: 'writing', index,
+    label: (index + 1) + '. ' + rubricLabels[example.criterion],
+    prompt: 'Rewrite this excerpt in your own words.',
+    original: example.original, reference: example.revised, reason: example.why,
+  })) : questions.flatMap((question, index) => ['incorrect', 'partial'].includes(question.status) ? [{
+    key: 'question:' + index, kind: 'question', index, label: 'Question ' + (index + 1),
+    prompt: question.question, original: question.studentAnswer,
+    reference: question.correctAnswer, reason: question.explanation,
+  }] : [])
+  return options.length > 0 && <FixAndExplain key={item.submissionId} options={options} saved={item.retry} onSave={onSave}/>
+}
+
+function WritingResult({ item, onSave }) {
   const { revisionExamples, paragraphSteps } = item.feedback
   const focus = item.feedback.rubric.reduce((lowest, row) => row.earned < lowest.earned ? row : lowest)
   return <><div className="page-head"><h1>{item.subject} writing results</h1><p>{item.studentName} · {gradeLabel(item.gradeLevel)} · {item.fileName}</p></div>
@@ -376,6 +409,7 @@ function WritingResult({ item }) {
       <div className="score-ring" style={{ '--score': item.scorePct + '%' }}><div><strong>{item.totalEarned}/{item.totalMax}</strong><span>Rubric points</span></div></div>
       <div><span className="grade-pill">{gradeLabel(item.gradeLevel)} rubric</span><h2>Writing feedback</h2><p>{item.feedback.overallFeedback}</p></div>
     </section>
+    <SheetRetry item={item} onSave={onSave}/>
     <section className="card paragraph-practice">
       <h2>Improve this paragraph</h2>
       {revisionExamples?.map((example, index) => <article className="paragraph-revision" key={index}>
@@ -452,7 +486,11 @@ function Result() {
     <p>Checking for updates every few seconds. You can reopen this sheet in History.</p>
   </section>
   if (item.status === 'error') return <section className="card grading"><h1>Grading didn’t finish</h1><Notice text={item.errorMessage}/><p>Your sheet allowance has been restored.</p><Link className="button primary" to="/grade">Upload another copy</Link></section>
-  if (item.feedback.rubric) return <WritingResult item={item}/>
+  async function saveRetry(retry) {
+    const result = await call('/submissions/' + id + '/retry', { method: 'POST', body: retry })
+    setItem((current) => current?.submissionId === id ? { ...current, ...result } : current)
+  }
+  if (item.feedback.rubric) return <WritingResult item={item} onSave={saveRetry}/>
   const questions = item.feedback.questions
   const all = expanded.length === questions.length
   const counts = Object.fromEntries(['correct', 'partial', 'incorrect'].map((status) => [status, questions.filter((question) => question.status === status).length]))
@@ -460,6 +498,7 @@ function Result() {
     <section className="card result-overview"><div className="score-ring" style={{ '--score': item.scorePct + '%' }}><div><strong>{item.scorePct}%</strong><span>{item.totalEarned} / {item.totalMax} points</span></div></div>
       <div><span className="grade-pill">Grade {item.grade}</span><h2>{item.feedback.encouragement}</h2><p>{item.feedback.overallFeedback}</p></div></section>
     <div className="stat-grid">{Object.entries(counts).map(([status, count]) => <div className={'card stat ' + status} key={status}><span>{status}</span><strong>{count}</strong></div>)}</div>
+    <SheetRetry item={item} onSave={saveRetry}/>
     <section><div className="section-head"><h2>Question breakdown</h2><button className="button secondary small" onClick={() => setExpanded(all ? [] : questions.map((_, index) => index))}>{all ? 'Collapse All' : 'Expand All'}</button></div>
     {questions.map((question, index) => {
       const open = expanded.includes(index)
@@ -600,7 +639,7 @@ function History() {
     {loading && <p role="status">Loading sheets…</p>}
     {!loading && !error && !rows.length && !cursor && <section className="card grading"><FolderClock size={31}/><h2>No sheets yet</h2><Link className="button primary" to="/grade">Grade a sheet</Link></section>}
     {[...groups.values()].map((group) => <section className="history-group" key={group[0].studentName}><h2>{current ? 'Submissions' : group[0].studentName}</h2>
-      {group.map((row) => <div className="card history-row" key={row.submissionId}><Link to={'/results/' + row.submissionId}><span className="tile"><FileText size={18}/></span><span><strong>{row.subject}</strong><small>{gradeLabel(row.gradeLevel)} · {row.fileName} · {new Date(row.createdAt).toLocaleDateString()}</small></span></Link>
+      {group.map((row) => <div className="card history-row" key={row.submissionId}><Link to={'/results/' + row.submissionId}><span className="tile"><FileText size={18}/></span><span><strong>{row.subject}{row.retrySavedAt && <span className="history-retry"> · Retry saved</span>}</strong><small>{gradeLabel(row.gradeLevel)} · {row.fileName} · {new Date(row.createdAt).toLocaleDateString()}</small></span></Link>
         <span className="status">{row.status === 'done' ? row.assessment === 'writing' ? row.totalEarned + '/' + row.totalMax + ' rubric points' : row.scorePct + '% · ' + row.grade : row.status === 'error' ? 'Unable to grade' : row.status}</span>
         <button className="button icon-button" aria-label={'Delete ' + row.fileName} onClick={() => setDeleting(row)}><Trash2 size={17}/></button></div>)}
     </section>)}
@@ -724,6 +763,7 @@ function App() {
       <Route path="/" element={<Landing/>}/>
       <Route path="/pricing" element={<Pricing/>}/>
       <Route path="/writing-practice" element={<WorkshopPage publicPage/>}/>
+      <Route path="/try-a-retry" element={<RetryDemo/>}/>
       {['login', 'register', 'verify', 'reset'].map((mode) => <Route key={mode} path={'/' + mode} element={<AuthPage key={mode} mode={mode}/>}/>)}
       {Object.keys(policies).map((type) => <Route key={type} path={'/' + type} element={<Policy type={type}/>}/>)}
       <Route element={<Dashboard/>}>

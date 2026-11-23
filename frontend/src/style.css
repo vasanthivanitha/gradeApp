@@ -281,3 +281,16 @@ dialog > .actions, dialog > .pricing-grid { margin-top: 15px; }
   .upload-form input, .upload-form select { font-size: 1rem; }
   .grade-submit { width: 100%; min-height: 44px; }
 }
+
+.retry-card { padding: clamp(16px, 3vw, 25px); margin: 18px 0; }
+.retry-prompt { background: #191d2c; padding: 14px; border-radius: 9px; margin: 14px 0; }
+.retry-prompt h3 { margin: 0 0 6px; }
+.retry-prompt p, .retry-comparison p { overflow-wrap: anywhere; white-space: pre-wrap; }
+.retry-field { margin-top: 14px; }
+.retry-form { display: grid; gap: 12px; justify-items: start; }
+.retry-form > label, .retry-comparison { width: 100%; }
+.retry-form textarea { width: 100%; padding: 10px; resize: vertical; background: #191d2c; color: var(--ink); border: 1px solid #34374b; border-radius: 8px; font: inherit; font-size: 1rem; }
+.retry-comparison { margin: 0; }
+.retry-note, .history-retry { font-size: .86rem; }
+.history-retry { color: var(--green); }
+.retry-demo-invite { margin: 0 auto 25px; padding: 18px; display: flex; gap: 14px; align-items: center; justify-content: space-between; flex-wrap: wrap; }

@@ -483,6 +483,9 @@ Resources:
         Route4:
           Type: HttpApi
           Properties: {ApiId: !Ref Api, Method: DELETE, Path: "/me"}
+        SaveRetry:
+          Type: HttpApi
+          Properties: {ApiId: !Ref Api, Method: POST, Path: "/submissions/{id}/retry"}
   SubmissionsLogs:
     Type: AWS::Logs::LogGroup
     Properties:

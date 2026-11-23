@@ -4,15 +4,49 @@ import uuid
 from boto3.dynamodb.conditions import Key
 from grade_common import (
     BUCKET, ClientError, Problem, conflict, db, endpoint, entitlement,
-    get, identity, key, profile, response, s3,
+    get, identity, key, payload, profile, response, s3,
 )
 
 PUBLIC = ('submissionId', 'studentName', 'subject', 'fileName', 'status', 'createdAt',
-          'scorePct', 'grade', 'totalEarned', 'totalMax', 'feedback', 'errorMessage', 'reservation', 'assessment', 'gradeLevel', 'skillBreakdown')
+          'scorePct', 'grade', 'totalEarned', 'totalMax', 'feedback', 'errorMessage', 'reservation', 'assessment', 'gradeLevel', 'skillBreakdown', 'retrySavedAt')
 
 
 def view(item, summary=False):
-    return {k: item[k] for k in PUBLIC if k in item and (not summary or k != 'feedback')}
+    fields = PUBLIC if summary else (*PUBLIC, 'retry')
+    return {k: item[k] for k in fields if k in item and (not summary or k != 'feedback')}
+
+
+def save_retry(event, uid, row):
+    if row['status'] != 'done':
+        raise Problem(409, 'Wait until grading finishes to save a retry.')
+    data = payload(event)
+    kind, index = data.get('kind'), data.get('index')
+    feedback = row.get('feedback', {})
+    if kind == 'writing':
+        options = feedback.get('revisionExamples', [])
+    elif kind == 'question':
+        options = feedback.get('questions', [])
+    else:
+        options = []
+    if (type(index) is not int or not 0 <= index < len(options) or
+            (kind == 'question' and options[index].get('status') not in ('incorrect', 'partial'))):
+        raise Problem(400, 'Choose an item from this sheet to retry.')
+    answer, explanation = data.get('answer'), data.get('explanation')
+    if (not isinstance(answer, str) or not 1 <= len(answer.strip()) <= 1200 or
+            not isinstance(explanation, str) or not 1 <= len(explanation.strip()) <= 600):
+        raise Problem(400, 'Enter a new answer and a short explanation of what changed.')
+    saved_at = int(time.time())
+    retry = {'kind': kind, 'index': index, 'answer': answer.strip(), 'explanation': explanation.strip()}
+    try:
+        db.update_item(Key=key(uid, row['SK']), UpdateExpression='SET #retry = :retry, retrySavedAt = :stamp',
+            ConditionExpression='attribute_exists(PK) AND #status = :done',
+            ExpressionAttributeNames={'#retry': 'retry', '#status': 'status'},
+            ExpressionAttributeValues={':retry': retry, ':stamp': saved_at, ':done': 'done'})
+    except ClientError as exc:
+        if conflict(exc):
+            raise Problem(409, 'This sheet is no longer available for retry.') from exc
+        raise
+    return response(200, {'retry': retry, 'retrySavedAt': saved_at})
 
 
 @endpoint
@@ -62,6 +96,8 @@ def handler(event, context):
         raise Problem(404, 'Sheet not found.')
     if route == 'GET /submissions/{id}':
         return response(200, view(row))
+    if route == 'POST /submissions/{id}/retry':
+        return save_retry(event, uid, row)
     if row['status'] not in ('done', 'error'):
         raise Problem(409, 'Wait for the sheet to finish processing before deleting it.')
     s3.delete_object(Bucket=BUCKET, Key=row['s3Key'])
