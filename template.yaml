@@ -76,6 +76,16 @@ Parameters:
     Type: String
     Default: ''
     Description: Optional ARN of JSON secret with secretKey and webhookSecret. Leave blank for grading-only staging.
+  GraderReservedConcurrency:
+    Type: Number
+    Default: 0
+    MinValue: 0
+    Description: Reserved Lambda concurrency. Zero uses the shared account pool.
+  MaintenanceReservedConcurrency:
+    Type: Number
+    Default: 0
+    MinValue: 0
+    Description: Reserved Lambda concurrency. Zero uses the shared account pool.
   DailyCap:
     Type: Number
     Default: 20
@@ -103,6 +113,8 @@ Rules:
       - Assert: !Not [!Equals [!Ref CertificateArn, '']]
         AssertDescription: Supply a us-east-1 certificate for the custom domain.
 Conditions:
+  HasMaintenanceReservation: !Not [!Equals [!Ref MaintenanceReservedConcurrency, '0']]
+  HasGraderReservation: !Not [!Equals [!Ref GraderReservedConcurrency, '0']]
   HasAlertEmail: !Not [!Equals [!Ref AlertEmail, '']]
   HasStripeSecret: !Not [!Equals [!Ref StripeSecretArn, '']]
   HasDomain: !Not [!Equals [!Ref CustomDomain, '']]
@@ -492,7 +504,7 @@ Resources:
       Layers: [!Ref DocxLayer]
       Timeout: 300
       MemorySize: 1024
-      ReservedConcurrentExecutions: 8
+      ReservedConcurrentExecutions: !If [HasGraderReservation, !Ref GraderReservedConcurrency, !Ref 'AWS::NoValue']
       EventInvokeConfig:
         MaximumRetryAttempts: 2
         MaximumEventAgeInSeconds: 900
@@ -607,7 +619,7 @@ Resources:
           STRIPE_SECRET: !Ref StripeSecretArn
           USER_POOL: !Ref UserPool
       Timeout: 240
-      ReservedConcurrentExecutions: 1
+      ReservedConcurrentExecutions: !If [HasMaintenanceReservation, !Ref MaintenanceReservedConcurrency, !Ref 'AWS::NoValue']
       Policies:
         - Statement:
             - Effect: Allow
