@@ -8,7 +8,7 @@ from grade_common import (
 )
 
 PUBLIC = ('submissionId', 'studentName', 'subject', 'fileName', 'status', 'createdAt',
-          'scorePct', 'grade', 'totalEarned', 'totalMax', 'feedback', 'errorMessage', 'reservation')
+          'scorePct', 'grade', 'totalEarned', 'totalMax', 'feedback', 'errorMessage', 'reservation', 'assessment', 'gradeLevel')
 
 
 def view(item, summary=False):

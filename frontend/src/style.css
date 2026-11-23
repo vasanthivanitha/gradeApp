@@ -213,3 +213,10 @@ dialog > .actions, dialog > .pricing-grid { margin-top: 15px; }
   .usage { grid-template-columns: auto 1fr; }
   .usage a { grid-column: 2; grid-row: 3; }
 }
+
+.assessment-row, .writing-rubric { margin-top: 22px; }
+.rubric-scale { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-bottom: 14px; font-size: .86rem; }
+.rubric-row { padding: 16px; margin-bottom: 10px; }
+.rubric-row .section-head { flex-wrap: wrap; margin-bottom: 8px; }
+.rubric-suggestion { margin-top: 8px; }
+.rubric-suggestion strong { color: var(--ink); }

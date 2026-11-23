@@ -219,6 +219,7 @@ function GradeSheet() {
   const { call, refresh } = useContext(AppContext)
   const navigate = useNavigate()
   const picker = useRef(null)
+  const [assessment, setAssessment] = useState('questions')
   const [file, setFile] = useState(null)
   const [error, setError] = useState('')
   const [dragging, setDragging] = useState(false)
@@ -244,6 +245,8 @@ function GradeSheet() {
     try {
       const info = await call('/uploads/presign', { method: 'POST', body: {
         studentName: fields.get('studentName'), subject: fields.get('subject'),
+        assessment,
+        ...(assessment === 'writing' ? { gradeLevel: Number(fields.get('gradeLevel')) } : {}),
         fileType: file.type, fileName: file.candidate.name, size: file.candidate.size,
       } })
       await upload(info.uploadUrl, info.headers, file.candidate, setProgress)
@@ -254,15 +257,24 @@ function GradeSheet() {
       setProgress(null)
     }
   }
-  return <><div className="page-head"><h1>Grade a sheet</h1><p>Upload your child’s answers for a score and feedback on every question.</p></div>
+  return <><div className="page-head"><h1>Grade a sheet</h1><p>Upload a question sheet or get grade-level feedback on a writing sample.</p></div>
     <form className="card upload-form" onSubmit={send}>
       <div className="form-row"><label>Student nickname<input name="studentName" placeholder="e.g. Alex" required maxLength={40} disabled={progress !== null}/></label>
-      <label>Subject<select name="subject" required defaultValue="" disabled={progress !== null}><option value="" disabled>Select a subject</option>{subjects.map((subject) => <option key={subject}>{subject}</option>)}</select></label></div>
+      <label>Subject<select name="subject" required defaultValue="" disabled={progress !== null}
+        onChange={(event) => { if (event.target.value === 'English') setAssessment('writing') }}><option value="" disabled>Select a subject</option>{subjects.map((subject) => <option key={subject}>{subject}</option>)}</select></label></div>
+      <div className="form-row assessment-row">
+        <label>Assessment type<select value={assessment} disabled={progress !== null} onChange={(event) => setAssessment(event.target.value)}>
+          <option value="questions">Question sheet</option><option value="writing">Writing sample</option>
+        </select></label>
+        {assessment === 'writing' && <label>Grade level<select name="gradeLevel" defaultValue="5" disabled={progress !== null}>
+          {Array.from({ length: 12 }, (_, index) => index + 1).map((level) => <option key={level} value={level}>Grade {level}</option>)}
+        </select></label>}
+      </div>
       <div className={'drop-zone' + (dragging ? ' dragging' : '')} onDragOver={(event) => { event.preventDefault(); setDragging(true) }} onDragLeave={() => setDragging(false)}
         onDrop={(event) => { event.preventDefault(); setDragging(false); pick(event.dataTransfer.files[0]) }}>
         <input ref={picker} type="file" hidden accept={Object.keys(formats).map((format) => '.' + format).join(',')} onChange={(event) => { pick(event.target.files[0]); event.target.value = '' }}/>
         <span className="tile">{file ? <FileText size={24}/> : <UploadCloud size={24}/>}</span>
-        <strong>{file ? file.candidate.name : 'Drag and drop your answer sheet'}</strong>
+        <strong>{file ? file.candidate.name : assessment === 'writing' ? 'Drag and drop your writing sample' : 'Drag and drop your answer sheet'}</strong>
         <p>{file ? (file.candidate.size / 1024 ** 2).toFixed(2) + ' MB' : 'JPEG, PNG, WebP, PDF, or DOCX up to 20 MB. Model limits may be lower.'}</p>
         <button type="button" className="button secondary small" disabled={progress !== null} onClick={() => picker.current.click()}>{file ? 'Change file' : 'Browse files'}</button>
       </div>
@@ -271,6 +283,33 @@ function GradeSheet() {
       <p className="privacy-note"><ShieldCheck size={18}/> Use a first name or nickname. Remove full names, school names, birth dates, and faces before uploading. Original files expire after 30 days.</p>
       <button className="button primary" disabled={progress !== null}><Sparkles size={17}/>{progress === null ? 'Grade this sheet' : 'Uploading…'}</button>
     </form></>
+}
+
+const rubricLabels = {
+  grammar: 'Grammar and mechanics',
+  language: 'Language and clarity',
+  vocabulary: 'Vocabulary',
+  organization: 'Organization',
+  content: 'Content and development',
+}
+const rubricLevels = ['No evidence', 'Beginning', 'Developing', 'Meets expectations', 'Exceeds expectations']
+
+function WritingResult({ item }) {
+  return <><div className="page-head"><h1>{item.subject} writing results</h1><p>{item.studentName} · Grade {item.gradeLevel} · {item.fileName}</p></div>
+    <section className="card result-overview">
+      <div className="score-ring" style={{ '--score': item.scorePct + '%' }}><div><strong>{item.totalEarned}/{item.totalMax}</strong><span>Rubric points</span></div></div>
+      <div><span className="grade-pill">Grade {item.gradeLevel} rubric</span><h2>Writing feedback</h2><p>{item.feedback.overallFeedback}</p></div>
+    </section>
+    <section className="writing-rubric">
+      <div className="section-head"><h2>Rubric and revision suggestions</h2></div>
+      <p className="rubric-scale">{rubricLevels.map((label, score) => <span key={label}>{score} · {label}</span>)}</p>
+      {item.feedback.rubric.map((row) => <article className="card rubric-row" key={row.criterion}>
+        <div className="section-head"><h3>{rubricLabels[row.criterion]}</h3>
+          <span className="grade-pill">{row.earned}/{row.max} · {rubricLevels[row.earned]}</span></div>
+        <p>{row.feedback}</p><p className="rubric-suggestion"><strong>Try this:</strong> {row.suggestion}</p>
+      </article>)}
+    </section>
+  </>
 }
 
 function Result() {
@@ -318,6 +357,7 @@ function Result() {
     <p>Checking for updates every few seconds. You can reopen this sheet in History.</p>
   </section>
   if (item.status === 'error') return <section className="card grading"><h1>Grading didn’t finish</h1><Notice text={item.errorMessage}/><p>Your sheet allowance has been restored.</p><Link className="button primary" to="/grade">Upload another copy</Link></section>
+  if (item.feedback.rubric) return <WritingResult item={item}/>
   const questions = item.feedback.questions
   const all = expanded.length === questions.length
   const counts = Object.fromEntries(['correct', 'partial', 'incorrect'].map((status) => [status, questions.filter((question) => question.status === status).length]))
@@ -378,7 +418,7 @@ function History() {
     {!loading && !error && !rows.length && !cursor && <section className="card grading"><FolderClock size={31}/><h2>No sheets yet</h2><Link className="button primary" to="/grade">Grade a sheet</Link></section>}
     {[...groups.values()].map((group) => <section className="history-group" key={group[0].studentName}><h2>{group[0].studentName}</h2>
       {group.map((row) => <div className="card history-row" key={row.submissionId}><Link to={'/results/' + row.submissionId}><span className="tile"><FileText size={18}/></span><span><strong>{row.subject}</strong><small>{row.fileName} · {new Date(row.createdAt).toLocaleDateString()}</small></span></Link>
-        <span className="status">{row.status === 'done' ? row.scorePct + '% · ' + row.grade : row.status === 'error' ? 'Unable to grade' : row.status}</span>
+        <span className="status">{row.status === 'done' ? row.assessment === 'writing' ? row.totalEarned + '/' + row.totalMax + ' rubric points' : row.scorePct + '% · ' + row.grade : row.status === 'error' ? 'Unable to grade' : row.status}</span>
         <button className="button icon-button" aria-label={'Delete ' + row.fileName} onClick={() => setDeleting(row)}><Trash2 size={17}/></button></div>)}
     </section>)}
     {cursor && <button className="button secondary" disabled={loading} onClick={() => load(cursor)}>Load more</button>}

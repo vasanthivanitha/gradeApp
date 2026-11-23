@@ -24,6 +24,12 @@ def handler(event, context):
         not isinstance(filename, str) or not filename or len(filename) > 200 or
         any(ord(c) < 32 for c in filename)):
         raise Problem(400, 'Choose a subject and a JPEG, PNG, WebP, PDF, or DOCX up to 20 MB.')
+    assessment = data.get('assessment', 'questions')
+    grade_level = data.get('gradeLevel')
+    if assessment not in ('questions', 'writing'):
+        raise Problem(400, 'Choose a question sheet or a writing sample.')
+    if assessment == 'writing' and (type(grade_level) is not int or not 1 <= grade_level <= 12):
+        raise Problem(400, 'Choose a grade level from 1 through 12.')
     extension = KINDS[mime]
     if extension in ('jpeg', 'png', 'webp') and size > int(os.environ['MAX_IMAGE_BYTES']):
         raise Problem(400, 'This grading model requires photos to be smaller. Resize the photo or upload a PDF.')
@@ -66,6 +72,8 @@ def handler(event, context):
             'size': size, 'status': 'uploading', 'createdAt': stamp,
             'reservation': 'trial' if trial else 'paid', 'reservedWindow': usage.get('window', 0),
             'pending': 'OPEN', 'pendingUntil': now + 900}
+        if assessment == 'writing':
+            item.update(assessment=assessment, gradeLevel=grade_level)
         try:
             transact(
                 ('Update', {'Key': key(uid), 'UpdateExpression': update,
