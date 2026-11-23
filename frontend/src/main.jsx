@@ -1,12 +1,13 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { BrowserRouter, Link, NavLink, Navigate, Outlet, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom'
-import { AlertCircle, BookOpen, Check, ChevronDown, CircleCheck, CreditCard, FileCheck2, FileText, Files, FolderClock, GraduationCap, LockKeyhole, LogOut, ScanLine, ShieldCheck, Sparkles, Trash2, UploadCloud, X } from 'lucide-react'
+import { AlertCircle, BookOpen, Camera, Check, ChevronDown, CircleCheck, CreditCard, FileCheck2, FileText, Files, FolderClock, GraduationCap, LockKeyhole, LogOut, ScanLine, ShieldCheck, Sparkles, Trash2, UploadCloud, X } from 'lucide-react'
 import { config, login, register, request, resend, reset, session, signOut, upload, verify } from './auth'
 import '@fontsource-variable/sora'
 import '@fontsource-variable/jetbrains-mono'
 import { gradeLabel, gradeLevels, progressFor, subjects } from './practice'
 import { WritingWorkshop } from './WritingWorkshop'
+import { prepareSheetPhoto } from './sheetPhoto'
 import './style.css'
 
 const AppContext = createContext(null)
@@ -61,7 +62,7 @@ function Landing() {
     </div>
     <section className="feature-section content-width" aria-labelledby="features"><h2 id="features">From upload to understanding</h2>
       <div className="feature-grid">
-        <Feature icon={UploadCloud} title="Upload any answer sheet">Send a photo, scanned PDF, or Word document for English, Math, or Science in grades K–5.</Feature>
+        <Feature icon={UploadCloud} title="Upload any answer sheet">Use your phone camera or upload a PDF or Word document for English, Math, or Science in grades K–5.</Feature>
         <Feature icon={FileCheck2} title="Get a score and clear feedback">See the grade, correct answers, and an explanation for each mistake.</Feature>
         <Feature icon={BookOpen} title="Review progress together">Reopen past sheets by student and turn mistakes into practice.</Feature>
       </div>
@@ -209,7 +210,7 @@ function Dashboard() {
     setAccount(null)
     navigate('/')
   }
-  return <><header className="header"><div className="nav-width"><Brand/><nav aria-label="Dashboard">
+  return <><header className="header"><div className="nav-width"><Brand/><nav className="dashboard-nav" aria-label="Dashboard">
     <NavLink to="/grade"><UploadCloud size={17}/>Grade Sheet</NavLink>
     <NavLink to="/history"><FolderClock size={17}/>History</NavLink>
     <NavLink to="/practice"><BookOpen size={17}/>Writing Practice</NavLink>
@@ -258,26 +259,51 @@ function GradeSheet() {
   const { state } = useLocation()
   const initialGrade = gradeLevels.includes(state?.gradeLevel) ? state.gradeLevel : 5
   const picker = useRef(null)
+  const camera = useRef(null)
   const [assessment, setAssessment] = useState('questions')
   const [file, setFile] = useState(null)
   const [error, setError] = useState('')
   const [dragging, setDragging] = useState(false)
   const [progress, setProgress] = useState(null)
-  function pick(candidate) {
-    if (!candidate || progress !== null) return
+  const [preparing, setPreparing] = useState(false)
+  const [preview, setPreview] = useState('')
+  const busy = preparing || progress !== null
+  useEffect(() => {
+    if (!file?.type.startsWith('image/')) {
+      setPreview('')
+      return
+    }
+    const url = URL.createObjectURL(file.candidate)
+    setPreview(url)
+    return () => URL.revokeObjectURL(url)
+  }, [file])
+  async function pick(candidate, fromCamera = false) {
+    if (!candidate || busy) return
     const extension = candidate.name.split('.').at(-1).toLowerCase()
-    if (!formats[extension] || !candidate.size || candidate.size > 20 * 1024 ** 2) {
-      setFile(null)
-      setError('Choose a JPEG, PNG, WebP, PDF, or DOCX up to 20 MB.')
+    const type = formats[extension]
+    const photo = fromCamera || type?.startsWith('image/') || candidate.type.startsWith('image/')
+    if (!candidate.size || candidate.size > 20 * 1024 ** 2 || (!type && !photo)) {
+      setError('Choose a photo, PDF, or DOCX up to 20 MB.')
       return
     }
     setError('')
-    setFile({ candidate, type: formats[extension] })
+    if (!photo) {
+      setFile({ candidate, type })
+      return
+    }
+    setPreparing(true)
+    try {
+      setFile(await prepareSheetPhoto(candidate, type))
+    } catch (error) {
+      setError(error.message)
+    } finally {
+      setPreparing(false)
+    }
   }
   async function send(event) {
     event.preventDefault()
-    if (!file) return setError('Choose an answer sheet to upload.')
-    if (progress !== null) return
+    if (busy) return
+    if (!file) return setError('Take a photo or choose a file before grading.')
     setProgress(0)
     setError('')
     const fields = new FormData(event.target)
@@ -295,29 +321,41 @@ function GradeSheet() {
   }
   return <><div className="page-head"><h1>Grade a sheet</h1><p>Upload a question sheet or get grade-level feedback on a writing sample.</p></div>
     <form className="card upload-form" onSubmit={send}>
-      <div className="form-row"><label>Student nickname<input name="studentName" placeholder="e.g. Alex" defaultValue={state?.studentName || ''} required maxLength={40} disabled={progress !== null}/></label>
-      <label>Subject<select name="subject" required defaultValue="" disabled={progress !== null}
+      <div className="form-row"><label>Student nickname<input name="studentName" placeholder="e.g. Alex" defaultValue={state?.studentName || ''} required maxLength={40} disabled={busy}/></label>
+      <label>Subject<select name="subject" required defaultValue="" disabled={busy}
         onChange={(event) => { if (event.target.value === 'English') setAssessment('writing') }}><option value="" disabled>Select a subject</option>{subjects.map((subject) => <option key={subject}>{subject}</option>)}</select></label></div>
       <div className="form-row assessment-row">
-        <label>Assessment type<select value={assessment} disabled={progress !== null} onChange={(event) => setAssessment(event.target.value)}>
+        <label>Assessment type<select value={assessment} disabled={busy} onChange={(event) => setAssessment(event.target.value)}>
           <option value="questions">Question sheet</option><option value="writing">Writing sample</option>
         </select></label>
-        <label>Grade level<select name="gradeLevel" defaultValue={initialGrade} disabled={progress !== null}>
+        <label>Grade level<select name="gradeLevel" defaultValue={initialGrade} disabled={busy}>
           {gradeLevels.map((level) => <option key={level} value={level}>{gradeLabel(level)}</option>)}
         </select></label>
       </div>
       <div className={'drop-zone' + (dragging ? ' dragging' : '')} onDragOver={(event) => { event.preventDefault(); setDragging(true) }} onDragLeave={() => setDragging(false)}
         onDrop={(event) => { event.preventDefault(); setDragging(false); pick(event.dataTransfer.files[0]) }}>
         <input ref={picker} type="file" hidden accept={Object.keys(formats).map((format) => '.' + format).join(',')} onChange={(event) => { pick(event.target.files[0]); event.target.value = '' }}/>
-        <span className="tile">{file ? <FileText size={24}/> : <UploadCloud size={24}/>}</span>
-        <strong>{file ? file.candidate.name : assessment === 'writing' ? 'Drag and drop your writing sample' : 'Drag and drop your answer sheet'}</strong>
-        <p>{file ? (file.candidate.size / 1024 ** 2).toFixed(2) + ' MB' : 'JPEG, PNG, WebP, PDF, or DOCX up to 20 MB. Model limits may be lower.'}</p>
-        <button type="button" className="button secondary small" disabled={progress !== null} onClick={() => picker.current.click()}>{file ? 'Change file' : 'Browse files'}</button>
+        <input ref={camera} type="file" hidden accept="image/*" capture="environment"
+          onChange={(event) => { pick(event.target.files[0], true); event.target.value = '' }}/>
+        {preview ? <img className="sheet-preview" src={preview} alt="Preview of the worksheet photo"/> :
+          <span className="tile">{file ? <FileText size={24}/> : <UploadCloud size={24}/>}</span>}
+        <strong>{file ? file.candidate.name : 'Add your child’s work'}</strong>
+        <p>{file ? (file.candidate.size / 1024 ** 2).toFixed(2) + ' MB' : 'Take a photo or choose a JPEG, PNG, WebP, PDF, or DOCX.'}</p>
+        {preview && <p>Check that the entire page is visible and the writing is readable.</p>}
+        {preparing && <p role="status">Preparing your photo…</p>}
+        <div className="actions upload-options">
+          <button type="button" className="button secondary" disabled={busy} onClick={() => camera.current.click()}>
+            <Camera size={18}/>{preview ? 'Retake photo' : 'Take photo'}</button>
+          <button type="button" className="button secondary" disabled={busy} onClick={() => picker.current.click()}>
+            <FileText size={18}/>{file ? 'Change file' : 'Choose file'}</button>
+          {file && <button type="button" className="button text-button" disabled={busy}
+            onClick={() => { setFile(null); setError('') }}>Remove file</button>}
+        </div>
       </div>
       <Notice text={error}/>
       {progress !== null && <div role="status" className="progress"><progress aria-label="Upload progress" max="100" value={progress}/><span>Uploading {progress}%</span></div>}
       <p className="privacy-note"><ShieldCheck size={18}/> Use a first name or nickname. Remove full names, school names, birth dates, and faces before uploading. Original files expire after 30 days.</p>
-      <button className="button primary" disabled={progress !== null}><Sparkles size={17}/>{progress === null ? 'Grade this sheet' : 'Uploading…'}</button>
+      <button className="button primary grade-submit" disabled={busy}><Sparkles size={17}/>{progress === null ? 'Grade this sheet' : 'Uploading…'}</button>
     </form></>
 }
 

@@ -269,3 +269,15 @@ dialog > .actions, dialog > .pricing-grid { margin-top: 15px; }
 .paragraph-revision { margin: 14px 0; padding-bottom: 12px; border-bottom: 1px solid #282c42; }
 .paragraph-revision h4 { margin: 0 0 6px; font-size: .9rem; }
 .paragraph-revision .workshop-example { margin: 8px 0; }
+
+.sheet-preview { display: block; width: 100%; max-height: 330px; object-fit: contain; border-radius: 8px; }
+.upload-options { justify-content: center; width: 100%; margin-top: 6px; }
+.upload-options button { min-height: 44px; }
+@media (max-width: 640px) {
+  .nav-width > nav { flex-wrap: wrap; justify-content: flex-start; column-gap: 13px; row-gap: 0; }
+  .nav-width > nav > a, .nav-width > nav > button { min-height: 44px; }
+  .dashboard-nav { flex: 1 1 100%; }
+  .upload-options { display: grid; grid-template-columns: minmax(0, 1fr); gap: 7px; }
+  .upload-form input, .upload-form select { font-size: 1rem; }
+  .grade-submit { width: 100%; min-height: 44px; }
+}
