@@ -105,7 +105,36 @@ QUESTION_SKILLS = {
 }
 
 
-def parse_writing(raw):
+def writing_revisions(result, source_text):
+    revisions = []
+    examples = result.get('revisionExamples')
+    if not isinstance(examples, list):
+        return revisions
+    source = ' '.join(source_text.split()) if source_text is not None else None
+    seen = set()
+    for example in examples[:5]:
+        if not isinstance(example, dict):
+            continue
+        criterion = example.get('criterion')
+        if not isinstance(criterion, str) or criterion not in WRITING_CRITERIA:
+            continue
+        try:
+            original = feedback_text(example.get('original'), 360)
+            revised = feedback_text(example.get('revised'), 500)
+            reason = feedback_text(example.get('why'), 500)
+        except ValueError:
+            continue
+        quote = ' '.join(original.split())
+        if quote in seen or quote == ' '.join(revised.split()) or (source is not None and quote not in source):
+            continue
+        seen.add(quote)
+        revisions.append({'criterion': criterion, 'original': original, 'revised': revised, 'why': reason})
+        if len(revisions) == 3:
+            break
+    return revisions
+
+
+def parse_writing(raw, source_text=None):
     result = decoded_feedback(raw)
     criteria = result.get('rubric')
     if not isinstance(criteria, dict) or criteria.keys() != WRITING_CRITERIA.keys():
@@ -121,10 +150,17 @@ def parse_writing(raw):
         rows.append({'criterion': category, 'earned': earned, 'max': RUBRIC_MAX,
                      'feedback': feedback_text(criterion.get('feedback'), 800),
                      'suggestion': feedback_text(criterion.get('suggestion'), 800)})
-    result = result_score(sum(row['earned'] for row in rows), RUBRIC_MAX * len(rows), {
-        'rubric': rows,
-        'overallFeedback': feedback_text(result.get('overallFeedback'), 2000),
-    })
+    feedback = {'rubric': rows, 'overallFeedback': feedback_text(result.get('overallFeedback'), 2000)}
+    revisions = writing_revisions(result, source_text)
+    if revisions:
+        feedback['revisionExamples'] = revisions
+    steps = result.get('paragraphSteps')
+    if isinstance(steps, list):
+        valid_steps = [step.strip() for step in steps[:3]
+                       if isinstance(step, str) and 1 <= len(step.strip()) <= 500]
+        if valid_steps:
+            feedback['paragraphSteps'] = valid_steps
+    result = result_score(sum(row['earned'] for row in rows), RUBRIC_MAX * len(rows), feedback)
     result['skillBreakdown'] = [{'skill': row['criterion'], 'earned': row['earned'], 'max': row['max']}
                                 for row in rows]
     return result
@@ -139,7 +175,14 @@ def writing_prompt(subject, grade_level):
         'Read the original wording carefully, including its spelling and punctuation. '
         'If the student writing cannot be reliably read, or no writing sample is present, return {"unreadable":true}. '
         'Use the visible assignment prompt if present; never invent one. Assess the writing, not agreement with the opinion. '
-        'Return strict JSON only with overallFeedback and a rubric object containing exactly these five keys. '
+        'Return strict JSON only with overallFeedback, revisionExamples, paragraphSteps and a rubric object. '
+        'revisionExamples is an array of up to three examples in priority order, each with criterion (a rubric key), '
+        'original (a short exact excerpt copied from the student, keeping its errors), revised (one possible edit), '
+        'and why (why that edit helps). Use distinct excerpts and omit any you cannot read or quote reliably. '
+        'Limit original to 360 characters and revised and why to 500 characters each. '
+        'paragraphSteps is an array of two or three actionable revision steps, each at most 500 characters. '
+        'Tie each step to ideas actually present in this paragraph, such as moving, clarifying, or supporting '
+        'a specific idea. Use the student’s topic, not a new practice topic. The rubric has exactly these five keys. '
         f'{criteria} '
         'Each key maps to an object with score (integer), feedback (string) and suggestion (string). '
         'Apply the same scale independently to each criterion: 0 = no evidence, 1 = beginning, '
@@ -242,7 +285,10 @@ def grade(sheet, subject, context, totals, grade_level=None, assessment='questio
                 for part in block.get('citationsContent', {}).get('content', []):
                     text_parts.append(part.get('text', ''))
             raw = ''.join(text_parts)
-            return parse_writing(raw) if assessment == 'writing' else parse(raw, subject)
+            if assessment == 'writing':
+                source_text = sheet['text'].partition('\n')[2] if 'text' in sheet else None
+                return parse_writing(raw, source_text)
+            return parse(raw, subject)
         except Unreadable:
             raise
         except ValueError:

@@ -266,3 +266,6 @@ dialog > .actions, dialog > .pricing-grid { margin-top: 15px; }
 .workshop-sample { margin-top: 10px; }
 .workshop-sample summary { cursor: pointer; color: var(--green); }
 .workshop-sample p { margin-top: 6px; }
+.paragraph-revision { margin: 14px 0; padding-bottom: 12px; border-bottom: 1px solid #282c42; }
+.paragraph-revision h4 { margin: 0 0 6px; font-size: .9rem; }
+.paragraph-revision .workshop-example { margin: 8px 0; }

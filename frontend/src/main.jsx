@@ -331,6 +331,7 @@ const rubricLabels = {
 const rubricLevels = ['No evidence', 'Beginning', 'Developing', 'Meets expectations', 'Exceeds expectations']
 
 function WritingResult({ item }) {
+  const { revisionExamples, paragraphSteps } = item.feedback
   const focus = item.feedback.rubric.reduce((lowest, row) => row.earned < lowest.earned ? row : lowest)
   return <><div className="page-head"><h1>{item.subject} writing results</h1><p>{item.studentName} · {gradeLabel(item.gradeLevel)} · {item.fileName}</p></div>
     <section className="card result-overview">
@@ -338,11 +339,23 @@ function WritingResult({ item }) {
       <div><span className="grade-pill">{gradeLabel(item.gradeLevel)} rubric</span><h2>Writing feedback</h2><p>{item.feedback.overallFeedback}</p></div>
     </section>
     <section className="card paragraph-practice">
-      <h2>Try a revision in the writing workshop</h2>
+      <h2>Improve this paragraph</h2>
+      {revisionExamples?.map((example, index) => <article className="paragraph-revision" key={index}>
+        <h3>{rubricLabels[example.criterion]}</h3>
+        <div className="workshop-example">
+          <div><h4>From your draft</h4><p>{example.original}</p></div>
+          <div><h4>One possible revision</h4><p>{example.revised}</p></div>
+        </div>
+        <p><strong>Why it helps</strong> {example.why}</p>
+      </article>)}
+      {paragraphSteps?.length > 0 && <div className="paragraph-revision">
+        <h3>What to change in the paragraph</h3>
+        <ol>{paragraphSteps.map((step, index) => <li key={index}>{step}</li>)}</ol>
+      </div>}
       <p><strong>Revision focus · {rubricLabels[focus.criterion]}</strong> {focus.suggestion}</p>
       <Link className="button secondary small" to="/practice" state={{
         focus: focus.criterion, suggestion: focus.suggestion, studentName: item.studentName, gradeLevel: item.gradeLevel,
-      }}>Practice this skill</Link>
+      }}>Open writing workshop</Link>
     </section>
     <section className="writing-rubric">
       <div className="section-head"><h2>Rubric and revision suggestions</h2></div>
