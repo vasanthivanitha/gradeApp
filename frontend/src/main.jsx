@@ -462,7 +462,7 @@ function BatchResults() {
       return <li className="card" key={id}>
         <div><strong>{row?.fileName || 'Sheet ' + (index + 1)}</strong>
           <p>{row?.status === 'done' ? row.assessment === 'writing'
-            ? row.totalEarned + '/' + row.totalMax + ' rubric points' : row.scorePct + '%'
+            ? row.totalEarned + '/' + row.totalMax + ' rubric points' : row.scorePct == null ? 'Needs review' : row.scorePct + '%'
             : row?.errorMessage || 'Waiting for grading'}</p></div>
         {row && row.status !== 'unavailable' && <Link to={'/results/' + id}>See feedback</Link>}
       </li>
@@ -470,14 +470,14 @@ function BatchResults() {
 }
 
 function questionCounts(questions) {
-  const counts = { correct: 0, partial: 0, incorrect: 0 }
+  const counts = { correct: 0, partial: 0, incorrect: 0, review: 0 }
   for (const { status } of questions) if (Object.hasOwn(counts, status)) counts[status]++
   return counts
 }
 
 function QuestionCounts({ counts }) {
-  const labels = { correct: 'Correct', partial: 'Partially correct', incorrect: 'Missed' }
-  return <div className="stat-grid" aria-label="Question totals">{Object.entries(counts).map(([status, count]) =>
+  const labels = { correct: 'Correct', partial: 'Partially correct', incorrect: 'Missed', review: 'Needs review' }
+  return <div className="stat-grid" aria-label="Question totals">{Object.entries(counts).filter(([status, count]) => status !== 'review' || count > 0).map(([status, count]) =>
     <div className={'card stat ' + status} key={status}><span>{labels[status]}</span><strong>{count}</strong></div>)}</div>
 }
 
@@ -604,16 +604,18 @@ function Result() {
   const all = expanded.length === questions.length
   const counts = questionCounts(questions)
   return <><div className="page-head"><h1>{item.subject} results</h1><p>{item.studentName} · {gradeLabel(item.gradeLevel)} · {item.fileName}</p></div>
-    <section className="card result-overview"><div className="score-ring" style={{ '--score': item.scorePct + '%' }}><div><strong>{item.scorePct}%</strong><span>{item.totalEarned} / {item.totalMax} points</span></div></div>
-      <div><span className="grade-pill">Grade {item.grade}</span><h2>{item.feedback.encouragement}</h2><p>{item.feedback.overallFeedback}</p></div></section>
+    <section className="card result-overview"><div className="score-ring" style={{ '--score': (item.scorePct ?? 0) + '%' }}><div><strong>{item.scorePct == null ? '—' : item.scorePct + '%'}</strong><span>{item.totalEarned} / {item.totalMax} points</span></div></div>
+      <div><span className="grade-pill">{item.grade == null ? 'Needs review' : 'Grade ' + item.grade}</span><h2>{item.feedback.encouragement}</h2><p>{item.feedback.overallFeedback}</p></div></section>
     <QuestionCounts counts={counts}/>
+    {counts.review > 0 && <p>Questions needing review were excluded from the score.</p>}
     <SheetRetry item={item} onSave={saveRetry}/>
     <section><div className="section-head"><h2>Question breakdown</h2><button className="button secondary small" onClick={() => setExpanded(all ? [] : questions.map((_, index) => index))}>{all ? 'Collapse All' : 'Expand All'}</button></div>
     {questions.map((question, index) => {
       const open = expanded.includes(index)
       return <article key={index} className="card question"><button className="question-toggle" type="button" aria-expanded={open} aria-controls={'question-' + index} onClick={() => setExpanded(open ? expanded.filter((i) => i !== index) : [...expanded, index])}>
-        <span>{question.label || index + 1}. {question.question}</span><span className={'question-status ' + question.status}>{question.earned}/{question.max} · {question.status}</span><ChevronDown size={18}/></button>
-        <div id={'question-' + index} className="question-body" hidden={!open}><dl><div><dt>Student answer</dt><dd>{question.studentAnswer}</dd></div><div><dt>Correct answer</dt><dd>{question.correctAnswer}</dd></div><div><dt>Explanation</dt><dd>{question.explanation}</dd></div></dl>
+        <span>{question.label || index + 1}. {question.question}</span><span className={'question-status ' + question.status}>{question.status === 'review' ? 'Needs review' : question.earned + '/' + question.max + ' · ' + question.status}</span><ChevronDown size={18}/></button>
+        <div id={'question-' + index} className="question-body" hidden={!open}><dl><div><dt>{question.choiceEvidence ? 'Student selections' : 'Student answer'}</dt><dd>{question.studentAnswer}</dd></div>
+          <div><dt>{question.choiceEvidence ? 'Correct choices' : 'Correct answer'}</dt><dd>{question.correctAnswer}</dd></div><div><dt>Explanation</dt><dd>{question.explanation}</dd></div></dl>
           {question.answerParts?.length > 0 && <div className="answer-parts">
             <h3>Answer-by-answer breakdown</h3>
             <ul>{question.answerParts.map((part) => <li key={part.label}>
@@ -775,7 +777,7 @@ function History() {
       {group.map((row) => <div className="card history-row" key={row.submissionId}><Link to={'/results/' + row.submissionId}><span className="tile"><FileText size={18}/></span><span><strong>{row.subject}{row.retrySavedAt && <span className="history-retry"> · {row.followUpCompletedAt ? 'Follow-up complete'
           : row.followUpDueAt ? (row.followUpDueAt * 1000 <= Date.now() ? 'Follow-up ready' : 'Follow-up ' + date(row.followUpDueAt))
           : 'Retry saved'}</span>}</strong><small>{gradeLabel(row.gradeLevel)} · {row.fileName} · {new Date(row.createdAt).toLocaleDateString()}</small></span></Link>
-        <span className="status">{row.status === 'done' ? row.assessment === 'writing' ? row.totalEarned + '/' + row.totalMax + ' rubric points' : row.scorePct + '% · ' + row.grade : row.status === 'error' ? 'Unable to grade' : row.status}</span>
+        <span className="status">{row.status === 'done' ? row.assessment === 'writing' ? row.totalEarned + '/' + row.totalMax + ' rubric points' : row.scorePct == null ? 'Needs review' : row.scorePct + '% · ' + row.grade : row.status === 'error' ? 'Unable to grade' : row.status}</span>
         <button className="button icon-button" aria-label={'Delete ' + row.fileName} onClick={() => setDeleting(row)}><Trash2 size={17}/></button></div>)}
     </section>)}
     {cursor && <button className="button secondary" disabled={loading} onClick={() => load(cursor)}>Load older sheets</button>}

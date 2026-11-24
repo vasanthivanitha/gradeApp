@@ -87,7 +87,8 @@ def feedback_text(value, limit):
 def result_score(earned, maximum, feedback):
     letter_grade = next(letter for minimum, letter in [(90, 'A'), (80, 'B'), (70, 'C'), (60, 'D'), (0, 'F')]
                         if earned * 100 >= minimum * maximum)
-    return {'scorePct': round(Decimal(100 * earned) / maximum, 2), 'grade': letter_grade,
+    return {'scorePct': round(Decimal(100 * earned) / maximum, 2) if maximum else None,
+            'grade': letter_grade if maximum else None,
             'totalEarned': earned, 'totalMax': maximum,
             'feedback': {**feedback, 'encouragement': 'Every correction is a chance to learn. Keep practicing!'}}
 
@@ -302,6 +303,53 @@ MATH_MULTI_ANSWER_PROMPT = (
 )
 
 
+def score_choices(evidence):
+    if not isinstance(evidence, dict) or evidence.get('kind') not in ('single', 'multiple'):
+        raise ValueError('Invalid choice evidence')
+    sets = {}
+    for field in ('selected', 'expected'):
+        if field not in evidence:
+            raise ValueError('Missing choice evidence')
+        values = evidence[field]
+        if values is None:
+            sets[field] = None
+            continue
+        if (not isinstance(values, list) or len(values) > 12 or
+                any(not isinstance(value, str) or not re.fullmatch('[A-Z]', value) for value in values) or
+                len(set(values)) != len(values)):
+            raise ValueError('Invalid choice labels')
+        sets[field] = sorted(values)
+    selected, expected = sets['selected'], sets['expected']
+    if expected == [] or (evidence['kind'] == 'single' and expected is not None and len(expected) != 1):
+        raise ValueError('Invalid answer key')
+    if selected is None or expected is None:
+        status = 'review'
+    elif selected == expected:
+        status = 'correct'
+    elif evidence['kind'] == 'multiple' and set(selected).intersection(expected):
+        status = 'partial'
+    else:
+        status = 'incorrect'
+    return status, {'kind': evidence['kind'], 'selected': selected, 'expected': expected}
+
+
+CHOICE_READING_PROMPT = (
+    ' For every printed multiple-choice item, first read the question and all options, then separately '
+    'record what the student marked and solve for the correct choices. Ignore teacher corrections, red '
+    'ticks or crosses, page scores, marks around the question number, and scratch calculations when '
+    'identifying the selected option letters. Look for circles, fills or ticks attached to an option '
+    'that can be attributed to the student. Do not infer a selected option from scratchwork or the key. '
+    'Read printed math notation including literal LaTeX commands such as times and div. Recompute '
+    'the arithmetic and check units, equivalent expressions and each statement independently. '
+    'Keep one numbered row for each choice question and include choiceEvidence with kind (single or '
+    'multiple), selected (array of uppercase option letters or null), and expected (array or null). '
+    'Use [] for clearly unanswered questions, null for marks you cannot confidently attribute, and '
+    'null for expected if the wording or options do not establish a defensible key. If only one item '
+    'is unclear, explain why in its row and continue grading the rest of the page. For a choice '
+    'question omit answerParts; choiceEvidence is authoritative. Do not count teacher marks as answers.'
+)
+
+
 def parse(raw, subject=None):
     result = decoded_feedback(raw)
     questions, summary = result.get('questions'), result.get('overallFeedback')
@@ -315,14 +363,16 @@ def parse(raw, subject=None):
     for question in questions:
         if not isinstance(question, dict):
             raise ValueError('Invalid question')
+        choice_status, choices = (score_choices(question['choiceEvidence'])
+                                  if question.get('choiceEvidence') is not None else (None, None))
         parts = None
-        if 'answerParts' in question and question['answerParts'] not in (None, []):
+        if choices is None and 'answerParts' in question and question['answerParts'] not in (None, []):
             parts = normalize_answer_parts(question['answerParts'])
-        status = question.get('status')
+        status = choice_status or question.get('status')
         if parts:
             statuses = {part['status'] for part in parts}
             status = 'correct' if statuses == {'correct'} else 'incorrect' if statuses == {'incorrect'} else 'partial'
-        if not isinstance(status, str) or status not in POINTS:
+        if not isinstance(status, str) or (status not in POINTS and choice_status != 'review'):
             raise ValueError('Invalid status')
         fields = {}
         for field in FIELDS:
@@ -330,29 +380,36 @@ def parse(raw, subject=None):
             if not isinstance(value, str) or not 1 <= len(value.strip()) <= 600:
                 raise ValueError('Invalid question field')
             fields[field] = value.strip()
-        if not parts and fields['studentAnswer'].casefold() == 'no answer':
+        if choices is None and not parts and fields['studentAnswer'].casefold() == 'no answer':
             status = 'incorrect'
-        earned = POINTS[status]
-        row = {**fields, 'status': status, 'earned': earned, 'max': 10}
+        earned = POINTS.get(status, 0)
+        maximum = 0 if status == 'review' else 10
+        row = {**fields, 'status': status, 'earned': earned, 'max': maximum}
+        if choices is not None:
+            row['choiceEvidence'] = choices
+            selected, expected = choices['selected'], choices['expected']
+            row['studentAnswer'] = ('Could not confirm from the photo' if selected is None
+                                    else ', '.join(selected) or 'No selection')
+            row['correctAnswer'] = 'Answer key needs review' if expected is None else ', '.join(expected)
         label = question.get('label')
         if isinstance(label, str) and 1 <= len(label.strip()) <= 24:
             row['label'] = label.strip()
         if parts:
             row['answerParts'] = parts
-        if status != 'correct':
+        if status in ('partial', 'incorrect'):
             practice = fraction_practice(subject, fields['question']) or practice_items(question.get('practice'), fields['question'])
             if practice:
                 row['practice'] = practice
         normalized.append(row)
         skill = question.get('skill')
-        if skill in allowed_skills:
+        if maximum and skill in allowed_skills:
             points = skill_points.setdefault(skill, {'skill': skill, 'earned': 0, 'max': 0})
             points['earned'] += earned
             points['max'] += 10
     if len(json.dumps(normalized, ensure_ascii=False).encode()) > 300_000:
         raise ValueError('Grading feedback exceeds the storage limit')
     earned = sum(question['earned'] for question in normalized)
-    maximum = 10 * len(normalized)
+    maximum = sum(question['max'] for question in normalized)
     result = result_score(earned, maximum, {'questions': normalized, 'overallFeedback': summary.strip()})
     if skill_points:
         result['skillBreakdown'] = list(skill_points.values())
@@ -368,7 +425,7 @@ def grade(sheet, subject, context, totals, grade_level=None, assessment='questio
         'against subject knowledge. Give partial credit for a substantially correct answer with material errors '
         'or omissions. Explain which claims are accurate and which need correction. '
         'A visibly blank answer is incorrect and its studentAnswer should be No answer. '
-        'If any question or answer cannot be reliably read or understood, or the document is not an answer sheet, '
+        'If the document is not an answer sheet or you cannot reliably read any of the questions, '
         'return {"unreadable":true}. Otherwise return only strict JSON with questions and overallFeedback. '
         'Each question has string fields question, studentAnswer, correctAnswer, status '
         '(correct, partial or incorrect), and explanation, and integer fields earned and max. '
@@ -382,7 +439,7 @@ def grade(sheet, subject, context, totals, grade_level=None, assessment='questio
         skills = ', '.join(QUESTION_SKILLS[subject])
         prompt += f' Add a skill field to each question. Use exactly one of {skills}, or null if none fits.'
     if assessment == 'questions' and subject == 'Math':
-        prompt += MATH_MULTI_ANSWER_PROMPT
+        prompt += MATH_MULTI_ANSWER_PROMPT + CHOICE_READING_PROMPT
     if grade_level is not None and assessment == 'questions':
         level = 'Kindergarten' if grade_level == 0 else f'Grade {grade_level}'
         prompt += f' Write the explanations for a U.S. {level} student.'
