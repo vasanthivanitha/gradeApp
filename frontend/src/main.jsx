@@ -607,6 +607,7 @@ function Result() {
     <section className="card result-overview"><div className="score-ring" style={{ '--score': (item.scorePct ?? 0) + '%' }}><div><strong>{item.scorePct == null ? '—' : item.scorePct + '%'}</strong><span>{item.totalEarned} / {item.totalMax} points</span></div></div>
       <div><span className="grade-pill">{item.grade == null ? 'Needs review' : 'Grade ' + item.grade}</span><h2>{item.feedback.encouragement}</h2><p>{item.feedback.overallFeedback}</p></div></section>
     <QuestionCounts counts={counts}/>
+    {item.feedback.sourceTranscribed && <p>Compare the question wording and selections below with your worksheet.</p>}
     {counts.review > 0 && <p>Questions needing review were excluded from the score.</p>}
     <SheetRetry item={item} onSave={saveRetry}/>
     <section><div className="section-head"><h2>Question breakdown</h2><button className="button secondary small" onClick={() => setExpanded(all ? [] : questions.map((_, index) => index))}>{all ? 'Collapse All' : 'Expand All'}</button></div>
@@ -614,7 +615,11 @@ function Result() {
       const open = expanded.includes(index)
       return <article key={index} className="card question"><button className="question-toggle" type="button" aria-expanded={open} aria-controls={'question-' + index} onClick={() => setExpanded(open ? expanded.filter((i) => i !== index) : [...expanded, index])}>
         <span>{question.label || index + 1}. {question.question}</span><span className={'question-status ' + question.status}>{question.status === 'review' ? 'Needs review' : question.earned + '/' + question.max + ' · ' + question.status}</span><ChevronDown size={18}/></button>
-        <div id={'question-' + index} className="question-body" hidden={!open}><dl><div><dt>{question.choiceEvidence ? 'Student selections' : 'Student answer'}</dt><dd>{question.studentAnswer}</dd></div>
+        <div id={'question-' + index} className="question-body" hidden={!open}>
+          {question.printedOptions && <div className="answer-parts"><h3>Choices read from the worksheet</h3>
+            <ul>{Object.entries(question.printedOptions).map(([letter, choice]) => <li key={letter}><strong>{letter}.</strong> {choice}</li>)}</ul>
+          </div>}
+          <dl><div><dt>{question.choiceEvidence ? 'Student selections' : 'Student answer'}</dt><dd>{question.studentAnswer}</dd></div>
           <div><dt>{question.choiceEvidence ? 'Correct choices' : 'Correct answer'}</dt><dd>{question.correctAnswer}</dd></div><div><dt>Explanation</dt><dd>{question.explanation}</dd></div></dl>
           {question.answerParts?.length > 0 && <div className="answer-parts">
             <h3>Answer-by-answer breakdown</h3>
